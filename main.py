@@ -1,21 +1,12 @@
 import pygame
 
-from car_env import ( # World constants, defined once in car_env.py
+from car_env import ( # World and drawing constants, defined once in car_env.py
     WIDTH, HEIGHT, CAR_WIDTH, CAR_HEIGHT, ROAD_WIDTH, ROAD_LENGTH, ROAD_X,
     RIGHT_LANE_CENTER, CAR_START_X, CAR_START_Y, CAR_SPEED,
+    GRASS_COLOR, ROAD_COLOR, LINE_COLOR, LINE_WIDTH, LINE_OFFSET, CAR_COLOR,
+    DASH_LINE_LENGTH, DASH_LINE_WIDTH, DASH_LINE_GAP, CAR_SCREEN_Y,
+    world_to_screen,
 )
-
-# Drawing constants: only needed to show the world on screen
-GRASS_COLOR = (60, 140, 60) # Define the color for grass
-ROAD_COLOR = (50, 50, 50) # Define the color for the road
-LINE_COLOR = (255, 255, 255) # Define the color for lane lines
-LINE_WIDTH = 3 # Define the width of the lane lines
-LINE_OFFSET = 3 # Define the offset for lane lines from the edge of the road
-CAR_COLOR = (255, 0, 0) # Define the color for the car
-DASH_LINE_LENGTH = CAR_HEIGHT // 2 # Define the length of the dashed lane lines
-DASH_LINE_WIDTH = LINE_WIDTH # Define the width of the dashed lane lines
-DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
-CAR_SCREEN_Y = CAR_START_Y # Fixed height on screen where the car is shown
 
 pygame.init() # Initialize Pygame
 screen = pygame.display.set_mode((WIDTH, HEIGHT)) # Create the window
@@ -31,9 +22,6 @@ dash_lines = [] # Initialize a list to hold the dashed lane lines
 for y in range(road.bottom - DASH_LINE_LENGTH, road.top, -(DASH_LINE_LENGTH + DASH_LINE_GAP)): # Create dashed lane lines along the road
     dash_line = pygame.Rect(WIDTH // 2 - DASH_LINE_WIDTH // 2, y, DASH_LINE_WIDTH, DASH_LINE_LENGTH) # Create a rectangle for a dashed lane line
     dash_lines.append(dash_line) # Add the dashed lane line to the list
-
-def world_to_screen(rect, camera_y): 
-    return rect.move(0, -camera_y) # Convert world coordinates to screen coordinates based on the camera's y position
 
 running = True # Set the running flag to True
 while running: # Main game loop
