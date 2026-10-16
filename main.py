@@ -1,27 +1,20 @@
 import pygame
 
-WIDTH, HEIGHT = 800, 600 # Set the width and height of the window
-GRASS_COLOR = (60, 140, 60) # Define the color for grass 
+from car_env import ( # World constants, defined once in car_env.py
+    WIDTH, HEIGHT, CAR_WIDTH, CAR_HEIGHT, ROAD_WIDTH, ROAD_LENGTH, ROAD_X,
+    RIGHT_LANE_CENTER, CAR_START_X, CAR_START_Y, CAR_SPEED,
+)
+
+# Drawing constants: only needed to show the world on screen
+GRASS_COLOR = (60, 140, 60) # Define the color for grass
 ROAD_COLOR = (50, 50, 50) # Define the color for the road
 LINE_COLOR = (255, 255, 255) # Define the color for lane lines
 LINE_WIDTH = 3 # Define the width of the lane lines
 LINE_OFFSET = 3 # Define the offset for lane lines from the edge of the road
 CAR_COLOR = (255, 0, 0) # Define the color for the car
-CAR_WIDTH = 30 # Define the width of the car
-CAR_HEIGHT = 50 # Define the height of the car
 DASH_LINE_LENGTH = CAR_HEIGHT // 2 # Define the length of the dashed lane lines
 DASH_LINE_WIDTH = LINE_WIDTH # Define the width of the dashed lane lines
 DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
-LANE_WIDTH = CAR_WIDTH * 3 # Define the width of a lane, triple than the car
-ROAD_WIDTH = LANE_WIDTH * 2 # Define the width of the road  
-RIGHT_LANE_CENTER = WIDTH // 2 + LANE_WIDTH // 2 # Center of the right lane
-LEFT_LANE_CENTER = WIDTH // 2 - LANE_WIDTH // 2 # Center of the left lane
-ROAD_LENGTH = 5000  # Define the length of the road
-ROAD_X = WIDTH // 2 - ROAD_WIDTH // 2 # Left edge of the road, centered horizontally
-CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the car, centered in the right lane
-CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
-CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
-CAR_SPEED = 5 # Define the speed of the car
 CAR_SCREEN_Y = CAR_START_Y # Fixed height on screen where the car is shown
 
 pygame.init() # Initialize Pygame
