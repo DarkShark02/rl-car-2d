@@ -16,6 +16,7 @@ CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the ca
 CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
 CAR_SPEED = 5 # Define the speed of the car
+MAX_STEPS = (ROAD_LENGTH // CAR_SPEED) * 2 # Maximum number of steps before the episode ends
 
 class CarEnv(gym.Env):
     def __init__(self):
@@ -23,15 +24,23 @@ class CarEnv(gym.Env):
         # objects that never change: road, lines
         self.road = pygame.Rect(ROAD_X, HEIGHT - ROAD_LENGTH, ROAD_WIDTH, ROAD_LENGTH) # Create a rectangle for the road
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
+        
+        self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: 0 = left, 1 = stay, 2 = right for x; same for y (0 = forward, 1 = stay, 2 = back)
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)         # Observation: dist_left, dist_right, lane offset, all divided by ROAD_WIDTH so they always stay within -1..1
+        self.step_count = 0 # Initialize the step counter
+
+    def lane_offset(self):
+        # signed distance in pixels from the car's center to the center of the right lane (negative = left)
+        return self.car.centerx - RIGHT_LANE_CENTER
 
     def get_obs(self):
         # compute the distances from the car to the road edges and the center of the right lane
         dist_left = self.car.left - self.road.left # Calculate the distance from the car to the left edge of the road
         dist_right = self.road.right - self.car.right # Calculate the distance from the car to the right edge of the road
-        car_center = self.car.left + self.car.width // 2 # Calculate the center x position of the car
-        dist_center_right_lane = car_center - RIGHT_LANE_CENTER # Calculate the distance from the car's center to the center of the right lane
-        
-        normalized_values = np.array([dist_left, dist_right, dist_center_right_lane], dtype=np.float32) / np.array([ROAD_WIDTH, ROAD_WIDTH, LANE_WIDTH // 2], dtype=np.float32) # Normalize the distances
+        dist_center_right_lane = self.lane_offset() # Calculate the distance from the car's center to the center of the right lane
+
+        # Every value is divided by ROAD_WIDTH: no distance on the road can be larger than that, so the result stays within -1..1
+        normalized_values = np.array([dist_left, dist_right, dist_center_right_lane], dtype=np.float32) / ROAD_WIDTH # Normalize the distances
         return normalized_values # Return the normalized distances as the observation
 
     def reset(self, seed=None, options=None):
@@ -44,6 +53,34 @@ class CarEnv(gym.Env):
         return self.get_obs(), {}
 
     def step(self, action):
-        # same as your update section, then compute the reward
-        # return observation, reward, terminated, truncated, info
-        pass
+        # action is a tuple of two values: (x_action, y_action)
+        dx = action[0] - 1 # calculate the change in x position based on the action (0 = left, 1 = stay, 2 = right)
+        dy = action[1] - 1 # calculate the change in y position based on the action (0 = forward, 1 = stay, 2 = back)
+        
+        prev_top = self.car.top # Store the previous top position of the car for reward calculation
+
+        self.car.left += dx * CAR_SPEED # Update the car's x position based on the input and speed
+        self.car.top += dy * CAR_SPEED # Update the car's y position
+
+        if self.car.bottom > self.road.bottom: # Wall at the bottom: block the car, the episode goes on
+            self.car.bottom = self.road.bottom # Keep the car within the bottom boundary of the road
+
+        reward = (prev_top - self.car.top) / ROAD_LENGTH * 10 # Reward for moving forward, scaled by the road length
+        reward -= 0.01 * abs(self.lane_offset()) / (LANE_WIDTH // 2) # Small penalty for being away from the center of the right lane, scaled by half the lane width
+
+        terminated = False # Initialize the terminated flag to False
+        truncated = False # Initialize the truncated flag to False
+
+        if self.car.left < self.road.left or self.car.right > self.road.right: # Off road: episode fails
+            terminated = True # Set the terminated flag to True
+            reward -= 5 # Add a penalty for going off the road
+
+        if self.car.top < self.road.top: # Reached the end of the road: episode succeeds
+            terminated = True # Set the terminated flag to True
+            reward += 20 # Add a reward for successfully reaching the end of the road
+
+        self.step_count += 1 # Increment the step counter
+        if self.step_count >= MAX_STEPS: # Check if the maximum number of steps has been reached
+            truncated = True
+
+        return self.get_obs(), reward, terminated, truncated, {} # Return the observation, reward, terminated flag, truncated flag, and an empty info dictionary
