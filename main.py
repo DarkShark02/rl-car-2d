@@ -77,7 +77,14 @@ while running: # Main game loop
 
     if car.bottom > road.bottom: # Wall at the bottom: block the car, the episode goes on
         car.bottom = road.bottom # Keep the car within the bottom boundary of the road
-        
+
+    dist_left = car.left - road.left # Calculate the distance from the car to the left edge of the road
+    dist_right = road.right - car.right # Calculate the distance from the car to the right edge of the road
+    car_center = car.left + car.width // 2 # Calculate the center x position of the car
+    dist_center_right_lane = car_center - RIGHT_LANE_CENTER # Calculate the distance from the car's center to the center of the right lane
+
+    print(f"dist_left: {dist_left}, dist_right: {dist_right}, dist_center_right_lane: {dist_center_right_lane}") # Print the distances for debugging
+
     # 3 draw
     camera_y = car.top - CAR_SCREEN_Y # Camera follows the car, keeping it at a fixed height on screen
 
