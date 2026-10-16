@@ -36,6 +36,7 @@ def world_to_screen(rect, camera_y):
 
 class CarEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60} # Gymnasium: supported render modes and speed
+    #metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 240} # Gymnasium: supported render modes and speed, increased to 240 for faster training
 
     def __init__(self, render_mode=None):
         # what the agent can do and what it sees (action_space, observation_space)
