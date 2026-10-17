@@ -15,7 +15,8 @@ The agent learns to accelerate, steer and stay in its own lane (3x speed).
 https://github.com/user-attachments/assets/617fd803-4bc1-484d-9ed8-fa05269e1079
 
 
-### Phase 4 — the agent learning to drive on a straight road (3x speed): from a random agent to a perfect run, one clip every 2,500 training steps.
+### Phase 4 — first steps on a straight road
+From a random agent to a perfect run, one clip every 2,500 training steps (3x speed).
 
 
 https://github.com/user-attachments/assets/5929eeca-17a1-45fe-a904-bfd861a09d6e
