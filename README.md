@@ -38,10 +38,14 @@ The goal is to grow this into a full course with curves, traffic lights, signs, 
   - [x] First PPO training: the agent reaches the end of the road, centered in its lane
   - [x] Keyboard mode built on the same environment
   - [x] Video of the training progress
-- [ ] Phase 4.5: car physics — speed with throttle and brake, steering ← in progress
-- [ ] Phase 5: traffic lights
-- [ ] Phase 6: traffic signs (stop, speed limits)
-- [ ] Phase 7: other cars to avoid
+- [ ] Phase 4.5: car physics — speed with throttle and brake, steering, a real car sprite ← in progress
+- [ ] Phase 5: curves — a road made of pieces, real ray sensors, progress measured along the road
+- [ ] Phase 6: traffic lights and intersections
+- [ ] Phase 7: traffic signs (stop, speed limits)
+- [ ] Phase 8: other cars and pedestrians
+- [ ] Phase 9: parking and maneuvers — reverse gear, parking spots, precise low-speed driving
+- [ ] Phase 10: procedural world — a generator that builds a different world every episode (curves, intersections, roundabouts, lights, signs, traffic, parking lots), so the agent learns to drive, not to memorize one track
+- [ ] Phase 11: scenery (trees, buildings) and the final training run from scratch, recorded from start to finish
 
 ## Requirements
 

@@ -1,6 +1,7 @@
 import pygame
 import numpy as np
 import gymnasium as gym
+import math
 
 # World constants: the single source of truth, also imported by main.py
 WIDTH, HEIGHT = 800, 600 # Set the width and height of the window
@@ -15,8 +16,17 @@ ROAD_X = WIDTH // 2 - ROAD_WIDTH // 2 # Left edge of the road, centered horizont
 CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the car, centered in the right lane
 CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
-CAR_SPEED = 5 # Define the speed of the car
-MAX_STEPS = (ROAD_LENGTH // CAR_SPEED) * 2 # Maximum number of steps before the episode ends
+
+# Car physics: every value is expressed in seconds, then converted to steps (the game runs at 60 steps per second)
+STEPS_PER_SECOND = 60 # Simulation steps in one second of game time
+MAX_SPEED = 5 # Top speed, in pixels per step
+ACCELERATION = MAX_SPEED / (5 * STEPS_PER_SECOND) # Full throttle: from 0 to MAX_SPEED in 5 seconds
+BRAKE = MAX_SPEED / (2 * STEPS_PER_SECOND) # Full brake: from MAX_SPEED to 0 in 2 seconds
+FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 in 6 seconds
+STEER_RATE = 90 / (1.5 * STEPS_PER_SECOND) / MAX_SPEED # Full steering at MAX_SPEED: a 90° turn in 1.5 seconds (degrees per pixel traveled)
+CAR_START_ANGLE = 90 # The car starts pointing up (0° = right, angles grow counterclockwise)
+
+MAX_STEPS = (ROAD_LENGTH // MAX_SPEED) * 2 # Maximum number of steps before the episode ends
 
 # Drawing constants: only needed to show the world on screen (render)
 GRASS_COLOR = (60, 140, 60) # Define the color for grass
@@ -54,7 +64,7 @@ class CarEnv(gym.Env):
             self.dash_lines.append(dash_line) # Add the dashed lane line to the list
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
         
-        self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: 0 = left, 1 = stay, 2 = right for x; same for y (0 = forward, 1 = stay, 2 = back)
+        self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)         # Observation: dist_left, dist_right, lane offset, all divided by ROAD_WIDTH so they always stay within -1..1
         self.step_count = 0 # Initialize the step counter
 
@@ -109,30 +119,47 @@ class CarEnv(gym.Env):
         return normalized_values # Return the normalized distances as the observation
 
     def reset(self, seed=None, options=None):
-        # put the car back at the start, reset the step counter
+        # put the car back at the start (position, angle, speed), reset the step counter
         # return first observation, info
         super().reset(seed=seed)
         self.car.left = CAR_START_X
         self.car.top = CAR_START_Y
+        self.car_x = CAR_START_X
+        self.car_y = CAR_START_Y
+        self.car_angle = CAR_START_ANGLE
+        self.car_speed = 0
         self.step_count = 0
         if self.render_mode == "human": # Gymnasium convention: in human mode the window updates by itself
             self.render()
         return self.get_obs(), {}
 
     def step(self, action):
-        # action is a tuple of two values: (x_action, y_action)
-        dx = action[0] - 1 # calculate the change in x position based on the action (0 = left, 1 = stay, 2 = right)
-        dy = action[1] - 1 # calculate the change in y position based on the action (0 = forward, 1 = stay, 2 = back)
+        # action is a pair of values: [steering, pedals]
+        steer = action[0] - 1 # Steering: -1 = left, 0 = straight, +1 = right
+        pedal = action[1] - 1 # Pedals: -1 = throttle, 0 = none, +1 = brake
         
-        prev_top = self.car.top # Store the previous top position of the car for reward calculation
+        prev_y = self.car_y # Store the previous y position of the car, to measure the progress of this step
 
-        self.car.left += dx * CAR_SPEED # Update the car's x position based on the input and speed
-        self.car.top += dy * CAR_SPEED # Update the car's y position
+        if pedal == -1: # Throttle
+            self.car_speed += ACCELERATION
+        elif pedal == 1: # Brake
+            self.car_speed -= BRAKE
+        else: # No pedals: the car slows down by itself
+            self.car_speed -= FRICTION
+        self.car_speed = max(0, min(self.car_speed, MAX_SPEED)) # Keep the speed between 0 and MAX_SPEED
 
-        if self.car.bottom > self.road.bottom: # Wall at the bottom: block the car, the episode goes on
-            self.car.bottom = self.road.bottom # Keep the car within the bottom boundary of the road
+        self.car_angle -= steer * STEER_RATE * self.car_speed # Update the car's angle based on the steering input and speed
+        self.car_x += self.car_speed * math.cos(math.radians(self.car_angle)) # Update the car's x position based on its angle and speed
+        self.car_y -= self.car_speed * math.sin(math.radians(self.car_angle)) # Update the car's y position based on its angle and speed
 
-        reward = (prev_top - self.car.top) / ROAD_LENGTH * 10 # Reward for moving forward, scaled by the road length
+        if self.car_y + CAR_HEIGHT > self.road.bottom: # Wall at the bottom: block the car, the episode goes on
+            self.car_y = self.road.bottom - CAR_HEIGHT # Put the car exactly against the wall
+            self.car_speed = 0 # Stop the car if it hits the bottom wall
+            
+        self.car.left = round(self.car_x) # The Rect (whole pixels) follows the true position (decimals): used for drawing and edge checks
+        self.car.top = round(self.car_y)
+
+        reward = (prev_y - self.car_y) / ROAD_LENGTH * 10 # Reward for moving forward, scaled by the road length
         reward -= 0.01 * abs(self.lane_offset()) / (LANE_WIDTH // 2) # Small penalty for being away from the center of the right lane, scaled by half the lane width
 
         terminated = False # Initialize the terminated flag to False
