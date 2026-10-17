@@ -120,6 +120,14 @@ def test_moving_forward_centered_earns_progress(env):
     assert not terminated and not truncated
 
 
+def test_wrong_way_never_pays_off_even_at_top_speed(env):
+    env.car_x = env.road.centerx - env.car.width / 2 # Car straddling the center line
+    env.car_speed = MAX_SPEED # Top speed: the most progress per step
+    obs, reward, terminated, truncated, info = env.step(THROTTLE)
+    assert env.car.left < env.road.centerx # Still partly in the opposite lane
+    assert reward < 0 # The wrong-way penalty is bigger than the best possible progress
+
+
 @pytest.mark.parametrize("action", [LEFT_THROTTLE, RIGHT_THROTTLE])
 def test_off_road_ends_episode_with_penalty(env, action):
     obs, reward, terminated, truncated, steps = run_until_done(env, action)

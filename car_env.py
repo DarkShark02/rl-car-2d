@@ -2,6 +2,7 @@ import pygame
 import numpy as np
 import gymnasium as gym
 import math
+import os
 
 # World constants: the single source of truth, also imported by main.py
 WIDTH, HEIGHT = 800, 600 # Set the width and height of the window
@@ -22,12 +23,19 @@ CAR_START_ANGLE = ROAD_ANGLE # Starting angle of the car, aligned with the road
 # Car physics: every value is expressed in seconds, then converted to steps (the game runs at 60 steps per second)
 STEPS_PER_SECOND = 60 # Simulation steps in one second of game time
 MAX_SPEED = 8 # Top speed, in pixels per step
-ACCELERATION = MAX_SPEED / (3 * STEPS_PER_SECOND) # Full throttle: from 0 to MAX_SPEED in 5 seconds
+ACCELERATION = MAX_SPEED / (3 * STEPS_PER_SECOND) # Full throttle: from 0 to MAX_SPEED in 3 seconds
 BRAKE = MAX_SPEED / (2 * STEPS_PER_SECOND) # Full brake: from MAX_SPEED to 0 in 2 seconds
 FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 in 6 seconds
-STEER_RATE = 90 / (1 * STEPS_PER_SECOND) / MAX_SPEED # Full steering at MAX_SPEED: a 90° turn in 1.5 seconds (degrees per pixel traveled)
+STEER_RATE = 90 / (1 * STEPS_PER_SECOND) / MAX_SPEED # Full steering at MAX_SPEED: a 90° turn in 1 seconds (degrees per pixel traveled)
 
 MAX_STEPS = (ROAD_LENGTH // MAX_SPEED) * 2 # Maximum number of steps before the episode ends
+
+# Rewards and penalties: the single source of truth, also imported by test_car_env.py
+OFF_ROAD_PENALTY = 5 # Penalty for going off the road
+FINISH_REWARD = 20 # Reward for reaching the end of the road
+ROAD_REWARD = 10 # Reward for reaching the end of the road, scaled by the road length
+MAX_PROGRESS_PER_STEP = MAX_SPEED / ROAD_LENGTH * ROAD_REWARD # Progress reward of one step at top speed
+WRONG_WAY_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step in the opposite lane costs twice the best progress: wrong way never pays off
 
 # Drawing constants: only needed to show the world on screen (render)
 GRASS_COLOR = (60, 140, 60) # Define the color for grass
@@ -35,13 +43,14 @@ ROAD_COLOR = (50, 50, 50) # Define the color for the road
 LINE_COLOR = (255, 255, 255) # Define the color for lane lines
 LINE_WIDTH = 3 # Define the width of the lane lines
 LINE_OFFSET = 3 # Define the offset for lane lines from the edge of the road
-CAR_COLOR = (255, 0, 0) # Define the color for the car
 DASH_LINE_LENGTH = CAR_HEIGHT // 2 # Define the length of the dashed lane lines
 DASH_LINE_WIDTH = LINE_WIDTH # Define the width of the dashed lane lines
 DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
 CAR_SCREEN_Y = CAR_START_Y # Fixed height on screen where the car is shown
 
-
+CAR_SPRITE_PATH = os.path.join(os.path.dirname(__file__), "assets", "controlled_car.png") # Car image, found next to this file
+CAR_SPRITE_ANGLE = 90 # Direction the car points to in the image (up)
+CAR_SPRITE_QUALITY = 4 # Keep the car image 4x bigger than drawn: rotating a big image and shrinking it looks much smoother
 
 def world_to_screen(rect, camera_y):
     return rect.move(0, -camera_y) # Convert world coordinates to screen coordinates based on the camera's y position
@@ -83,6 +92,12 @@ class CarEnv(gym.Env):
                 self.screen = pygame.Surface((WIDTH, HEIGHT)) # Invisible surface for videos
             self.clock = pygame.time.Clock()
 
+            image = pygame.image.load(CAR_SPRITE_PATH) # Load the car image from the specified path
+            car_only = image.subsurface(image.get_bounding_rect()) # Cut away the transparent border around the car
+            sprite_width = round(CAR_HEIGHT * car_only.get_width() / car_only.get_height()) # Keep the image proportions (option A)
+            self.car_sprite = pygame.transform.smoothscale(car_only, (sprite_width * CAR_SPRITE_QUALITY, CAR_HEIGHT * CAR_SPRITE_QUALITY)) # Shrink it, but keep it CAR_SPRITE_QUALITY times bigger than the car
+
+
         camera_y = self.car.top - CAR_SCREEN_Y # Camera follows the car, keeping it at a fixed height on screen
 
         self.screen.fill(GRASS_COLOR) # Fill the screen with green {grass}
@@ -91,7 +106,10 @@ class CarEnv(gym.Env):
         pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(self.right_line, camera_y)) # Draw the right lane
         for dash_line in self.dash_lines: # Draw each dashed lane line
             pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(dash_line, camera_y)) # Draw a dashed lane line
-        pygame.draw.rect(self.screen, CAR_COLOR, world_to_screen(self.car, camera_y)) # Draw the car on the screen
+        
+        rotated = pygame.transform.rotozoom(self.car_sprite, self.car_angle - CAR_SPRITE_ANGLE, 1 / CAR_SPRITE_QUALITY) # 1. Rotate the image like the car (smooth edges) and shrink it to the car size
+        car_center = world_to_screen(self.car, camera_y).center # 2. Where the car's center is on screen
+        self.screen.blit(rotated, rotated.get_rect(center=car_center)) # 3. Paste it with its center on the car's center
 
         if self.render_mode == "human":
             pygame.event.pump() # Keep the window responsive
@@ -163,19 +181,22 @@ class CarEnv(gym.Env):
         self.car.left = round(self.car_x) # The Rect (whole pixels) follows the true position (decimals): used for drawing and edge checks
         self.car.top = round(self.car_y)
 
-        reward = (prev_y - self.car_y) / ROAD_LENGTH * 10 # Reward for moving forward, scaled by the road length
+        reward = (prev_y - self.car_y) / ROAD_LENGTH * ROAD_REWARD # Reward for moving forward, scaled by the road length
         reward -= 0.01 * abs(self.lane_offset()) / (LANE_WIDTH // 2) # Small penalty for being away from the center of the right lane, scaled by half the lane width
+
+        if self.car.left < self.road.centerx: # Wrong way: part of the car is in the opposite lane
+            reward -= WRONG_WAY_PENALTY # Add a penalty for being in the wrong lane
 
         terminated = False # Initialize the terminated flag to False
         truncated = False # Initialize the truncated flag to False
 
         if self.car.left < self.road.left or self.car.right > self.road.right: # Off road: episode fails
             terminated = True # Set the terminated flag to True
-            reward -= 5 # Add a penalty for going off the road
+            reward -= OFF_ROAD_PENALTY # Add a penalty for going off the road
 
         if self.car.top < self.road.top: # Reached the end of the road: episode succeeds
             terminated = True # Set the terminated flag to True
-            reward += 20 # Add a reward for successfully reaching the end of the road
+            reward += FINISH_REWARD # Add a reward for successfully reaching the end of the road
 
         self.step_count += 1 # Increment the step counter
         if self.step_count >= MAX_STEPS: # Check if the maximum number of steps has been reached
