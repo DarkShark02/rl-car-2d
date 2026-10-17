@@ -28,7 +28,7 @@ The goal is to grow this into a full course with curves, traffic lights, signs, 
 - [ ] Phase 4: Gymnasium environment + first training run (stay on the road) ← in progress
   - [x] Gymnasium environment (`car_env.py`)
   - [x] First PPO training: the agent reaches the end of the road, centered in its lane
-  - [ ] Keyboard mode built on the same environment
+  - [x] Keyboard mode built on the same environment
   - [ ] Video of the training progress
 - [ ] Phase 4.5: car physics — speed with throttle and brake, steering
 - [ ] Phase 5: traffic lights
