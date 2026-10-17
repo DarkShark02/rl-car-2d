@@ -160,6 +160,27 @@ def test_time_limit_truncates_the_episode(env):
     assert steps == MAX_STEPS
 
 
+# --- Observations: [dist_left, dist_right, lane_offset, speed, direction] ---
+
+def test_speed_observation_goes_from_0_to_1(env):
+    obs, *_ = env.step(COAST)
+    assert obs[3] == 0 # Still
+    obs, *_ = repeat(env, THROTTLE, 5 * STEPS_PER_SECOND)
+    assert obs[3] == pytest.approx(1) # Top speed
+
+
+@pytest.mark.parametrize("angle, expected", [
+    (90, 0), # Straight up, along the road
+    (135, 0.25), # 45° to the left
+    (45, -0.25), # 45° to the right
+    (450, 0), # A full turn more: still straight
+    (-90, -1), # Pointing backward
+])
+def test_direction_observation_is_relative_to_the_road(env, angle, expected):
+    env.car_angle = angle
+    assert env.get_obs()[4] == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("action", [LEFT_THROTTLE, RIGHT_THROTTLE])
 def test_observations_stay_in_space_even_off_road(env, action):
     while True:

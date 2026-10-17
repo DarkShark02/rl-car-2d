@@ -13,18 +13,19 @@ RIGHT_LANE_CENTER = WIDTH // 2 + LANE_WIDTH // 2 # Center of the right lane
 LEFT_LANE_CENTER = WIDTH // 2 - LANE_WIDTH // 2 # Center of the left lane
 ROAD_LENGTH = 5000  # Define the length of the road
 ROAD_X = WIDTH // 2 - ROAD_WIDTH // 2 # Left edge of the road, centered horizontally
+ROAD_ANGLE = 90 # The road is vertical, pointing up (0° = right, angles grow counterclockwise)
 CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the car, centered in the right lane
 CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
+CAR_START_ANGLE = ROAD_ANGLE # Starting angle of the car, aligned with the road
 
 # Car physics: every value is expressed in seconds, then converted to steps (the game runs at 60 steps per second)
 STEPS_PER_SECOND = 60 # Simulation steps in one second of game time
-MAX_SPEED = 5 # Top speed, in pixels per step
-ACCELERATION = MAX_SPEED / (5 * STEPS_PER_SECOND) # Full throttle: from 0 to MAX_SPEED in 5 seconds
+MAX_SPEED = 8 # Top speed, in pixels per step
+ACCELERATION = MAX_SPEED / (3 * STEPS_PER_SECOND) # Full throttle: from 0 to MAX_SPEED in 5 seconds
 BRAKE = MAX_SPEED / (2 * STEPS_PER_SECOND) # Full brake: from MAX_SPEED to 0 in 2 seconds
 FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 in 6 seconds
-STEER_RATE = 90 / (1.5 * STEPS_PER_SECOND) / MAX_SPEED # Full steering at MAX_SPEED: a 90° turn in 1.5 seconds (degrees per pixel traveled)
-CAR_START_ANGLE = 90 # The car starts pointing up (0° = right, angles grow counterclockwise)
+STEER_RATE = 90 / (1 * STEPS_PER_SECOND) / MAX_SPEED # Full steering at MAX_SPEED: a 90° turn in 1.5 seconds (degrees per pixel traveled)
 
 MAX_STEPS = (ROAD_LENGTH // MAX_SPEED) * 2 # Maximum number of steps before the episode ends
 
@@ -39,6 +40,7 @@ DASH_LINE_LENGTH = CAR_HEIGHT // 2 # Define the length of the dashed lane lines
 DASH_LINE_WIDTH = LINE_WIDTH # Define the width of the dashed lane lines
 DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
 CAR_SCREEN_Y = CAR_START_Y # Fixed height on screen where the car is shown
+
 
 
 def world_to_screen(rect, camera_y):
@@ -65,7 +67,7 @@ class CarEnv(gym.Env):
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
         
         self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)         # Observation: dist_left, dist_right, lane offset, all divided by ROAD_WIDTH so they always stay within -1..1
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)  # Observations: [distance to left edge, distance to right edge, distance to center of right lane, speed, direction], all normalized between -1 and 1
         self.step_count = 0 # Initialize the step counter
 
     def render(self):
@@ -110,12 +112,14 @@ class CarEnv(gym.Env):
 
     def get_obs(self):
         # compute the distances from the car to the road edges and the center of the right lane
-        dist_left = self.car.left - self.road.left # Calculate the distance from the car to the left edge of the road
-        dist_right = self.road.right - self.car.right # Calculate the distance from the car to the right edge of the road
-        dist_center_right_lane = self.lane_offset() # Calculate the distance from the car's center to the center of the right lane
+        normalized_dist_left = (self.car.left - self.road.left) / ROAD_WIDTH # Calculate the distance from the car to the left edge of the road
+        normalized_dist_right = (self.road.right - self.car.right) / ROAD_WIDTH # Calculate the distance from the car to the right edge of the road
+        normalized_dist_center_right_lane = self.lane_offset() / ROAD_WIDTH # Calculate the distance from the car's center to the center of the right lane
+        normalized_speed = self.car_speed / MAX_SPEED # Normalize the speed
+        normalized_direction = ((self.car_angle - ROAD_ANGLE + 180) % 360 - 180) / 180 # Difference from "the road direction", always between -1 and +1
 
-        # Every value is divided by ROAD_WIDTH: no distance on the road can be larger than that, so the result stays within -1..1
-        normalized_values = np.array([dist_left, dist_right, dist_center_right_lane], dtype=np.float32) / ROAD_WIDTH # Normalize the distances
+        normalized_values = np.array([normalized_dist_left, normalized_dist_right, normalized_dist_center_right_lane, normalized_speed, normalized_direction], dtype=np.float32)
+
         return normalized_values # Return the normalized distances as the observation
 
     def reset(self, seed=None, options=None):
