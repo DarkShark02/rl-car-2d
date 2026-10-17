@@ -13,11 +13,12 @@ RUN_NAME = f"{RUN_PREFIX}{version}" # Name of this training run: used for the fi
 print(f"Training run: {RUN_NAME}")
 TOTAL_STEPS = 30_000 # How long to train: on the straight road the agent learns everything in ~20k steps
 CHECKPOINT_EVERY = 2_500 # Save a copy of the agent every N steps, to watch or record its progress later (dense, to capture the learning)
+SEED = 0 # Fixed seed: the same code gives the same training, so you can tell if a change really helped
 
 env = CarEnv() # The world the agent will learn in
 #env = CarEnv(render_mode="human") # The world the agent will learn in, with a window showing the car and road
 
-model = PPO("MlpPolicy", env, verbose=1) # The agent: PPO algorithm with a small neural network as its "brain"
+model = PPO("MlpPolicy", env, verbose=1, seed=SEED) # The agent: PPO algorithm with a small neural network as its "brain"
 
 checkpoints = CheckpointCallback( # Saves models/checkpoints/<RUN_NAME>/<RUN_NAME>_<steps>_steps.zip during training
     save_freq=CHECKPOINT_EVERY,

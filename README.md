@@ -68,7 +68,16 @@ python watch.py    # watch the trained agent drive (optional: path to another mo
 python record.py   # make a video of the agent at every checkpoint: videos/<run>_progress.mp4
 ```
 
-Trained models are saved in `models/`, which is not tracked by git.
+Trained models are saved in `models/`, which is not tracked by git. Every training run gets a new name (`ppo_car_v1`, `ppo_car_v2`, ...).
+
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The tests check the environment rules (rewards, end of episode, wall, time limit) and the Gymnasium API, in under a second.
 
 ## What I learned
 
@@ -82,3 +91,7 @@ _I'll update this section at every phase: problems I ran into, rewards that didn
 - **Reward what happened, not what was asked.** Progress is measured from the car's real movement, so pushing against the wall at the bottom earns nothing.
 - **Scale matters.** I first chose -2500 / +10000; PPO prefers small numbers, so I divided everything by 500 and kept the same ratios.
 - **Learning is not a straight line.** In my run the agent reached the end after only 2,500 steps, then got *worse* at staying centered for a while, and only became perfect after ~15,000 steps. Every run is a bit different, because the network starts from random weights.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
