@@ -10,7 +10,9 @@ The end goal: stay on the road, stop at red lights, obey traffic signs, and avoi
 
 Phase 4 — the agent learning to drive on a straight road (3x speed): from a random agent to a perfect run, one clip every 2,500 training steps.
 
-<!-- Drag videos/ppo_car_v2_progress.mp4 here in the GitHub editor -->
+
+https://github.com/user-attachments/assets/5929eeca-17a1-45fe-a904-bfd861a09d6e
+
 
 ## How it works
 
