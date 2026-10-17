@@ -55,8 +55,9 @@ pip install -r requirements.txt
 
 ```bash
 python main.py     # drive the car yourself (arrow keys or WASD)
-python train.py    # train the agent with PPO, saves models/ppo_car_v1.zip
+python train.py    # train the agent with PPO, saving a checkpoint every 10k steps
 python watch.py    # watch the trained agent drive (optional: path to another model)
+python record.py   # make a video of the agent at every checkpoint: videos/<run>_progress.mp4
 ```
 
 Trained models are saved in `models/`, which is not tracked by git.

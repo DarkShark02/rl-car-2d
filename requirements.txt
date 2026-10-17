@@ -2,3 +2,4 @@ numpy==2.5.4
 pygame==2.6.1
 gymnasium==1.4.0
 stable-baselines3==2.9.0
+moviepy==2.2.1
