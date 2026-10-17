@@ -1,11 +1,18 @@
+import os
+
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 
 from car_env import CarEnv
 
-RUN_NAME = "ppo_car_v2" # Name of this training run: used for the final model and the checkpoints folder
-TOTAL_STEPS = 100_000 # How long to train
-CHECKPOINT_EVERY = 10_000 # Save a copy of the agent every N steps, to watch or record its progress later
+RUN_PREFIX = "ppo_car_v" # Every training run gets the next free name: ppo_car_v1, ppo_car_v2, ppo_car_v3...
+version = 1
+while os.path.exists(f"models/{RUN_PREFIX}{version}.zip") or os.path.exists(f"models/checkpoints/{RUN_PREFIX}{version}"):
+    version += 1
+RUN_NAME = f"{RUN_PREFIX}{version}" # Name of this training run: used for the final model and the checkpoints folder
+print(f"Training run: {RUN_NAME}")
+TOTAL_STEPS = 30_000 # How long to train: on the straight road the agent learns everything in ~20k steps
+CHECKPOINT_EVERY = 2_500 # Save a copy of the agent every N steps, to watch or record its progress later (dense, to capture the learning)
 
 env = CarEnv() # The world the agent will learn in
 #env = CarEnv(render_mode="human") # The world the agent will learn in, with a window showing the car and road

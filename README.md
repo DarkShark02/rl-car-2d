@@ -6,6 +6,12 @@ The end goal: stay on the road, stop at red lights, obey traffic signs, and avoi
 
 > 🚧 Work in progress: I'm building this step by step to learn machine learning.
 
+## Training progress
+
+Phase 4 — the agent learning to drive on a straight road (3x speed): from a random agent to a perfect run, one clip every 2,500 training steps.
+
+<!-- Drag videos/ppo_car_v2_progress.mp4 here in the GitHub editor -->
+
 ## How it works
 
 - **Environment**: a straight two-lane road seen from above, drawn with Pygame. The camera follows the car. The simulation runs without a window during training.
@@ -25,12 +31,12 @@ The goal is to grow this into a full course with curves, traffic lights, signs, 
 - [x] Phase 1: window, road, and a car you can drive with the keyboard
 - [x] Phase 2: off-road detection + camera that follows the car
 - [x] Phase 3: sensors (distances to the road edges and lane center; ray sensors will come with other cars)
-- [ ] Phase 4: Gymnasium environment + first training run (stay on the road) ← in progress
+- [x] Phase 4: Gymnasium environment + first training run (stay on the road)
   - [x] Gymnasium environment (`car_env.py`)
   - [x] First PPO training: the agent reaches the end of the road, centered in its lane
   - [x] Keyboard mode built on the same environment
-  - [ ] Video of the training progress
-- [ ] Phase 4.5: car physics — speed with throttle and brake, steering
+  - [x] Video of the training progress
+- [ ] Phase 4.5: car physics — speed with throttle and brake, steering ← in progress
 - [ ] Phase 5: traffic lights
 - [ ] Phase 6: traffic signs (stop, speed limits)
 - [ ] Phase 7: other cars to avoid
@@ -55,7 +61,7 @@ pip install -r requirements.txt
 
 ```bash
 python main.py     # drive the car yourself (arrow keys or WASD)
-python train.py    # train the agent with PPO, saving a checkpoint every 10k steps
+python train.py    # train the agent with PPO, saving a checkpoint every 2,500 steps
 python watch.py    # watch the trained agent drive (optional: path to another model)
 python record.py   # make a video of the agent at every checkpoint: videos/<run>_progress.mp4
 ```
@@ -65,3 +71,12 @@ Trained models are saved in `models/`, which is not tracked by git.
 ## What I learned
 
 _I'll update this section at every phase: problems I ran into, rewards that didn't work, and how I fixed them._
+
+### Phases 1–4
+- **Keep the simulation separate from the drawing.** Training runs without a window and thousands of times faster, so the rules of the world (movement, edges, rewards) must not depend on anything visual. Even the camera lives only in the drawing code.
+- **World vs screen coordinates.** The road is 5000 px long and never moves; the camera just decides which part of it you see (`screen_y = world_y - camera_y`).
+- **Observation ≠ reward.** What the agent *sees* (distances to the edges, offset from the lane center) is not the same as how it is *judged*. Giving it "1 = good, 0 = bad" as input would tell it that it failed, but not where or by how much.
+- **Reward hacking is real.** Paying the agent for "being centered" would have paid it to stand still. Making per-step penalties bigger than the crash penalty would have taught it to crash on purpose, just to stop losing points.
+- **Reward what happened, not what was asked.** Progress is measured from the car's real movement, so pushing against the wall at the bottom earns nothing.
+- **Scale matters.** I first chose -2500 / +10000; PPO prefers small numbers, so I divided everything by 500 and kept the same ratios.
+- **Learning is not a straight line.** In my run the agent reached the end after only 2,500 steps, then got *worse* at staying centered for a while, and only became perfect after ~15,000 steps. Every run is a bit different, because the network starts from random weights.

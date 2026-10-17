@@ -9,7 +9,13 @@ from stable_baselines3 import PPO
 
 from car_env import CarEnv
 
-RUN_NAME = sys.argv[1] if len(sys.argv) > 1 else "ppo_car_v2" # Which training run to record: python record.py <run name>
+def latest_run():
+    # The most recent training run in models/checkpoints (by modification time)
+    runs = [os.path.join("models/checkpoints", name) for name in os.listdir("models/checkpoints")]
+    return os.path.basename(max(runs, key=os.path.getmtime))
+
+
+RUN_NAME = sys.argv[1] if len(sys.argv) > 1 else latest_run() # Which training run to record: python record.py [run name], default = latest
 CHECKPOINT_DIR = f"models/checkpoints/{RUN_NAME}"
 OUTPUT_PATH = f"videos/{RUN_NAME}_progress.mp4"
 FRAME_SKIP = 3 # Keep 1 frame out of 3: the video plays at 3x speed, so it stays short
