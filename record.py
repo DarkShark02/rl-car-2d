@@ -21,6 +21,7 @@ OUTPUT_PATH = f"videos/{RUN_NAME}_progress.mp4"
 FRAME_SKIP = 3 # Keep 1 frame out of 3: the video plays at 3x speed, so it stays short
 VIDEO_FPS = 60
 MAX_CLIP_SECONDS = 6 # Cut episodes that last longer (e.g. an agent standing still until the time limit)
+SAME_RESULT_TOLERANCE = 0.5 # Two checkpoints with the same outcome and rewards closer than this look the same: the later one is skipped
 
 
 def checkpoint_steps(filename):
@@ -40,7 +41,7 @@ def add_label(frame, text, font):
 
 
 def record_episode(model, label, font, deterministic=True):
-    # Play one episode with the given model and return its labeled frames
+    # Play one episode with the given model; return its labeled frames, total reward and outcome
     env = CarEnv(render_mode="rgb_array")
     obs, info = env.reset()
     frames = []
@@ -56,8 +57,13 @@ def record_episode(model, label, font, deterministic=True):
         if len(frames) >= MAX_CLIP_SECONDS * VIDEO_FPS:
             break
     frames.extend([frames[-1]] * VIDEO_FPS) # Hold the last frame for 1 second, so the final result is readable
-    print(f"{label}: {env.step_count} steps, reward {total_reward:.2f}")
-    return frames
+    if terminated and env.car.top < env.road.top:
+        outcome = "finish"
+    elif terminated:
+        outcome = "off road"
+    else:
+        outcome = "time out"
+    return frames, total_reward, outcome
 
 
 pygame.init()
@@ -75,8 +81,18 @@ for filename in files:
     clips.append((model, f"After {steps:,} steps", True)) # Trained agents: their best action
 
 all_frames = []
-for model, label, deterministic in clips:
-    all_frames.extend(record_episode(model, label, font, deterministic))
+last_kept = None # (outcome, reward) of the last clip added to the video
+for i, (model, label, deterministic) in enumerate(clips):
+    frames, total_reward, outcome = record_episode(model, label, font, deterministic)
+    is_last = i == len(clips) - 1
+    same_as_before = (last_kept is not None and outcome == last_kept[0]
+                      and abs(total_reward - last_kept[1]) < SAME_RESULT_TOLERANCE)
+    if same_as_before and not is_last: # Nothing new to show: skip it (the final checkpoint is always shown)
+        print(f"{label}: {outcome}, reward {total_reward:.2f}  (skipped: same as before)")
+        continue
+    print(f"{label}: {outcome}, reward {total_reward:.2f}")
+    all_frames.extend(frames)
+    last_kept = (outcome, total_reward)
 
 os.makedirs("videos", exist_ok=True)
 ImageSequenceClip(all_frames, fps=VIDEO_FPS).write_videofile(OUTPUT_PATH, codec="libx264", logger=None)
