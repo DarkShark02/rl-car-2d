@@ -69,7 +69,10 @@ clips = [(PPO("MlpPolicy", env, seed=0), "Untrained (0 steps)", False)] # Start 
 files = sorted(os.listdir(CHECKPOINT_DIR), key=checkpoint_steps)
 for filename in files:
     steps = checkpoint_steps(filename)
-    clips.append((PPO.load(os.path.join(CHECKPOINT_DIR, filename)), f"After {steps:,} steps", True)) # Trained agents: their best action
+    model = PPO.load(os.path.join(CHECKPOINT_DIR, filename))
+    if model.observation_space.shape != env.observation_space.shape: # Old runs were trained on a different world (e.g. 3 observations instead of 5)
+        sys.exit(f"{RUN_NAME} was trained on an older version of the environment: record a newer run.")
+    clips.append((model, f"After {steps:,} steps", True)) # Trained agents: their best action
 
 all_frames = []
 for model, label, deterministic in clips:

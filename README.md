@@ -17,8 +17,8 @@ https://github.com/user-attachments/assets/5929eeca-17a1-45fe-a904-bfd861a09d6e
 ## How it works
 
 - **Environment**: a straight two-lane road seen from above, drawn with Pygame. The camera follows the car. The simulation runs without a window during training.
-- **Observations**: three numbers, normalized to -1..1 — distance to the left edge of the road, distance to the right edge, and offset from the center of the right lane.
-- **Actions**: for now the car moves in 4 directions (left/right, forward/back) at a fixed speed. Steering, acceleration and braking come in phase 4.5.
+- **Observations**: five numbers, normalized to -1..1 — distance to the left edge of the road, distance to the right edge, offset from the center of the right lane, speed, and direction of the car relative to the road.
+- **Actions**: steering (left / straight / right) and pedals (throttle / none / brake). The car has real momentum: it accelerates gradually, slows down by itself, and only turns while moving. No reverse gear yet.
 - **Rewards**:
   - \+ for real progress toward the end of the road
   - − for drifting away from the center of the right lane
@@ -38,7 +38,7 @@ The goal is to grow this into a full course with curves, traffic lights, signs, 
   - [x] First PPO training: the agent reaches the end of the road, centered in its lane
   - [x] Keyboard mode built on the same environment
   - [x] Video of the training progress
-- [ ] Phase 4.5: car physics — speed with throttle and brake, steering, a real car sprite ← in progress
+- [x] Phase 4.5: car physics — speed with throttle and brake, steering, a real car sprite
 - [ ] Phase 5: curves — a road made of pieces, real ray sensors, progress measured along the road
 - [ ] Phase 6: traffic lights and intersections
 - [ ] Phase 7: traffic signs (stop, speed limits)
@@ -68,11 +68,11 @@ pip install -r requirements.txt
 ```bash
 python main.py     # drive the car yourself (arrow keys or WASD)
 python train.py    # train the agent with PPO, saving a checkpoint every 2,500 steps
-python watch.py    # watch the trained agent drive (optional: path to another model)
-python record.py   # make a video of the agent at every checkpoint: videos/<run>_progress.mp4
+python watch.py    # watch the latest trained agent drive (optional: path to another model)
+python record.py   # make a video of the latest run at every checkpoint: videos/<run>_progress.mp4
 ```
 
-Trained models are saved in `models/`, which is not tracked by git. Every training run gets a new name (`ppo_car_v1`, `ppo_car_v2`, ...).
+Trained models are saved in `models/`, which is not tracked by git. Every training run gets a new name (`ppo_car_v1`, `ppo_car_v2`, ...). Models trained before a change to the observations can't be loaded by the new environment: `watch.py` and `record.py` tell you when that happens.
 
 ### Tests
 
@@ -95,6 +95,16 @@ _I'll update this section at every phase: problems I ran into, rewards that didn
 - **Reward what happened, not what was asked.** Progress is measured from the car's real movement, so pushing against the wall at the bottom earns nothing.
 - **Scale matters.** I first chose -2500 / +10000; PPO prefers small numbers, so I divided everything by 500 and kept the same ratios.
 - **Learning is not a straight line.** In my run the agent reached the end after only 2,500 steps, then got *worse* at staying centered for a while, and only became perfect after ~15,000 steps. Every run is a bit different, because the network starts from random weights.
+
+### Phase 4.5
+- **Physics in seconds, not in steps.** Acceleration, braking, friction and steering are written as "from 0 to top speed in 3 seconds", then converted to steps. Changing the top speed keeps the car feeling the same.
+- **True position vs pixels.** With sine and cosine the car moves by fractions of a pixel, but `pygame.Rect` only stores whole numbers. The real position is kept as decimals and the `Rect` follows it. The tests even caught the wall checking the rounded position and letting the car slip half a pixel through it.
+- **The agent needs to know its speed and heading.** Two cars in the same spot look identical from the edge distances alone, even if one is stopped and the other is about to leave the road at 30°.
+- **Faster car, broken reward.** After the physics update, the agent reached the end in the shortest possible time... driving on the wrong side of the road. At the new top speed, the progress of one step outweighed the lane penalty. The fix: a wrong-way penalty that is always twice the best possible progress per step, computed from the top speed so it can never fall behind again.
+
+## Credits
+
+- Car sprite: [Top Down Car Sprites](https://opengameart.org/node/33247) by Unlucky Studio (OpenGameArt), free for personal and commercial use.
 
 ## License
 
