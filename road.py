@@ -19,6 +19,7 @@ def build_center_line(pieces, start_x, start_y, start_angle):
 
     return points
 
+
 def nearest_point_index(points, x, y):
     # Index of the point of the center line closest to (x, y)
     nearest_index = 0
@@ -31,3 +32,22 @@ def nearest_point_index(points, x, y):
             nearest_index = i
 
     return nearest_index
+
+
+def road_angle(points, i):
+    # Direction of the road at point i, in degrees (0° = right, counterclockwise)
+    j = min(i, len(points) - 2) # Use the piece from point j to j+1; at the last point, use the piece that leads to it
+    x1, y1 = points[j]
+    x2, y2 = points[j + 1]
+    right = x2 - x1 # How much the road moves to the right
+    up = y1 - y2 # How much it moves up (in pygame, going up means y gets smaller)
+    return math.degrees(math.atan2(up, right))
+
+
+def side_offset(points, i, x, y):
+    # How far (x, y) is from the center line at point i: positive = right of the road, negative = left
+    right_dir = math.radians(road_angle(points, i) - 90) # The road's right side is 90° clockwise from the road's direction
+    px, py = points[i]
+    dx = x - px # Arrow from the center line to (x, y): how much it goes right...
+    dy_up = py - y # ...and how much it goes up
+    return dx * math.cos(right_dir) + dy_up * math.sin(right_dir) # Projection ("shadow") of the arrow on the right direction
