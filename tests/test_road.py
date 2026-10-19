@@ -1,6 +1,6 @@
 import pytest
 
-from road import POINT_SPACING, build_center_line, nearest_point_index
+from road import POINT_SPACING, build_center_line, nearest_point_index, road_angle, side_offset
 
 START = (445, 600)
 UP = 90 # The pen starts pointing up (0° = right, angles grow counterclockwise)
@@ -38,3 +38,27 @@ def test_nearest_point_follows_the_distance_along_the_road():
     assert nearest_point_index(points, 445, 100) == 100 # 500 px ahead = point 100
     assert nearest_point_index(points, 500, 100) == 100 # Moving sideways doesn't change it
     assert nearest_point_index(points, 445, -1000) == len(points) - 1 # Past the end: the last point
+
+
+def test_road_angle_follows_the_road():
+    straight = build_center_line([(1000, 0)], *START, UP)
+    assert road_angle(straight, 0) == pytest.approx(90) # Up, at the start...
+    assert road_angle(straight, 100) == pytest.approx(90) # ...in the middle...
+    assert road_angle(straight, len(straight) - 1) == pytest.approx(90) # ...and at the last point
+    turning = build_center_line([(300, -90), (300, 0)], *START, UP)
+    assert road_angle(turning, len(turning) - 1) == pytest.approx(0) # After a 90° right turn: pointing right
+
+
+def test_side_offset_is_positive_on_the_right_and_negative_on_the_left():
+    straight = build_center_line([(1000, 0)], *START, UP)
+    assert side_offset(straight, 40, 465, 400) == pytest.approx(20) # 20 px right of the line
+    assert side_offset(straight, 40, 425, 400) == pytest.approx(-20) # 20 px left of the line
+    assert side_offset(straight, 40, 445, 400) == pytest.approx(0) # On the line
+
+
+def test_right_and_left_are_relative_to_the_road_not_the_screen():
+    turning = build_center_line([(300, -90), (300, 0)], *START, UP) # The road ends up going right
+    i = len(turning) - 1
+    px, py = turning[i]
+    assert side_offset(turning, i, px, py + 10) == pytest.approx(10) # Below a road going right = its right side
+    assert side_offset(turning, i, px, py - 10) == pytest.approx(-10) # Above it = its left side

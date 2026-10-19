@@ -128,6 +128,14 @@ def test_wrong_way_never_pays_off_even_at_top_speed(env):
     assert reward < 0 # The wrong-way penalty is bigger than the best possible progress
 
 
+def test_wheels_on_the_grass_cost_a_penalty_but_the_episode_goes_on(env):
+    env.car_x = env.road.right - env.car.width + 10 # Right wheels 10 px on the grass, center still on the road
+    env.car_speed = MAX_SPEED # Top speed: the most progress per step
+    obs, reward, terminated, truncated, info = env.step(THROTTLE)
+    assert not terminated # Only the wheels are out: the episode goes on
+    assert reward < 0 # The grass penalty is bigger than the best possible progress
+
+
 @pytest.mark.parametrize("action", [LEFT_THROTTLE, RIGHT_THROTTLE])
 def test_off_road_ends_episode_with_penalty(env, action):
     obs, reward, terminated, truncated, steps = run_until_done(env, action)
