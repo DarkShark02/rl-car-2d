@@ -3,7 +3,7 @@ import numpy as np
 import gymnasium as gym
 import math
 import os
-from road import build_center_line, nearest_point_index, offset_line, POINT_SPACING, road_angle, side_offset, ray_length
+from road import build_center_line, nearest_point_index, offset_line, POINT_SPACING, random_road_pieces, ray_length, road_angle, side_offset
 
 # World constants: the single source of truth, also imported by main.py
 WIDTH, HEIGHT = 800, 600 # Set the width and height of the window
@@ -19,7 +19,7 @@ CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the ca
 CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
 CAR_START_ANGLE = ROAD_ANGLE # Starting angle of the car, aligned with the road
-ROAD_PIECES = [(300, 0), (400, -90), (500, 0), (400, 90), (1000, 0)] # Default road: pieces of (length, degrees), + = left turn. Start with a straight piece
+ROAD_PIECES = [(300, 0), (400, -90), (500, 0), (400, 90), (1000, 0)] # A fixed test road, never used in training: to check that the agent can drive a road it has never seen
 ROAD_PIECES_COUNT = 16 # How many pieces a random road has (about 6000-8000 pixels)
 RAY_SEARCH_WINDOW = 5 # A ray moves POINT_SPACING pixels per step: its nearest road point moves at most ~1 point, so a tiny search is enough
 
@@ -39,6 +39,7 @@ BRAKING_DISTANCE = (MAX_SPEED / 2) * (MAX_SPEED / BRAKE) # Average speed while b
 RAY_LENGTH = 1.25 * BRAKING_DISTANCE # The car sees a bit farther than it needs to stop
 RAY_ANGLES = [-90, -45, -20, 0, 20, 45, 90] # Angles of the rays the car uses to "see" the road, relative to the car's direction (degrees, counterclockwise)
 RAY_STEP = 5 # How many pixels the rays advance at each step, when checking if they hit the road
+CAR_SEARCH_WINDOW = 5 # The car moves at most MAX_SPEED (8) pixels per step, less than 2 points: searching 5 points around its last index is enough
 
 # Rewards and penalties: the single source of truth, also imported by test_car_env.py
 OFF_ROAD_PENALTY = 5 # Penalty for going off the road
@@ -86,17 +87,30 @@ class CarEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60} # Gymnasium: supported render modes and speed
     #metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 240} # Gymnasium: supported render modes and speed, increased to 240 for faster training
 
-    def __init__(self, render_mode=None, road_pieces=ROAD_PIECES):
-        # what the agent can do and what it sees (action_space, observation_space)
-        # objects that never change: road, lines
+    def __init__(self, render_mode=None, road_pieces=None):
+        # what the agent can do and what it sees (action_space, observation_space); the road itself is built at every reset
         self.render_mode = render_mode # None = no drawing (training), "human" = window, "rgb_array" = image for videos
         self.screen = None # Created only the first time render() is called
         self.clock = None
+        self.fixed_road_pieces = road_pieces # None = a new random road at every reset; a list of pieces = always that road
 
-        self.road_points = build_center_line(road_pieces, ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE) # Create the road's center line points based on the defined pieces
-        self.road_length = sum(length for length, degrees in road_pieces) # Total length of this road: the sum of all its pieces
+        self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
+
+        self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)  # Observations: [angle distance in 7 rays, distance to center of right lane, speed, direction], all normalized between -1 and 1
+        self.step_count = 0 # Initialize the step counter
+        self.road_index = 0 # Index of the nearest point on the road to the car's center
+
+    def build_road(self, pieces):
+        # Everything that depends on the road: rebuilt at every reset, because the road can change
+        self.road_points = build_center_line(pieces, ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE) # The road's center line
+        self.road_length = sum(length for length, degrees in pieces) # Total length of this road: the sum of all its pieces
         self.max_steps = int(self.road_length / MAX_SPEED * TIME_LIMIT_FACTOR) # Time limit: depends on how long this road is
-        self.road = pygame.Rect(ROAD_X, HEIGHT - self.road_length, ROAD_WIDTH, self.road_length) # Create a rectangle for the road
+        self.road = pygame.Rect(ROAD_X, HEIGHT - self.road_length, ROAD_WIDTH, self.road_length) # Only used for the wall behind the start
+        self.road_drawing_ready = False # The shapes to draw are built only when render() needs them: training never draws
+
+    def build_road_drawing(self):
+        # The shapes used to draw this road (only needed by render)
         outer = ROAD_WIDTH / 2 - LINE_OFFSET # From the center line to the outer side of each white edge line
         inner = outer - LINE_WIDTH # ...and to its inner side
         self.left_line_shape = self.line_shape(-outer, -inner) # White line along the left edge (negative = left), as an exact strip
@@ -105,17 +119,11 @@ class CarEnv(gym.Env):
         # The road as one shape: along the left edge from start to end, then back along the right edge (like drawing an outline without lifting the pen)
         self.road_polygon = offset_line(self.road_points, -ROAD_WIDTH / 2) + offset_line(self.road_points, ROAD_WIDTH / 2)[::-1]
         start_dir = math.radians(road_angle(self.road_points, 0)) # Direction of the road at the start
-        line_span = outer # The start line goes from the outer side of one edge line to the other
-        left_start, right_start = offset_line(self.road_points[:2], -line_span)[0], offset_line(self.road_points[:2], line_span)[0] # Outer sides of the edge lines, at the first point
+        left_start, right_start = offset_line(self.road_points[:2], -outer)[0], offset_line(self.road_points[:2], outer)[0] # Outer sides of the edge lines, at the first point
         near, far = LINE_OFFSET, LINE_OFFSET + START_LINE_WIDTH # The start line begins after the same grey margin as the sides
         self.start_line = [move(left_start, start_dir, near), move(right_start, start_dir, near), move(right_start, start_dir, far), move(left_start, start_dir, far)] # Exact rectangle across the road
         self.finish_squares = self.build_finish_squares() # Checkered squares across the road at its last point
-        self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
-        
-        self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)  # Observations: [angle distance in 7 rays, distance to center of right lane, speed, direction], all normalized between -1 and 1
-        self.step_count = 0 # Initialize the step counter
-        self.road_index = 0 # Index of the nearest point on the road to the car's center
+        self.road_drawing_ready = True
 
     def line_shape(self, side_a, side_b):
         # A white strip running along the road between two side distances, stopping LINE_OFFSET before both ends (the same grey margin as on the sides)
@@ -165,6 +173,9 @@ class CarEnv(gym.Env):
             car_only = image.subsurface(image.get_bounding_rect()) # Cut away the transparent border around the car
             sprite_width = round(CAR_HEIGHT * car_only.get_width() / car_only.get_height()) # Keep the image proportions (option A)
             self.car_sprite = pygame.transform.smoothscale(car_only, (sprite_width * CAR_SPRITE_QUALITY, CAR_HEIGHT * CAR_SPRITE_QUALITY)) # Shrink it, but keep it CAR_SPRITE_QUALITY times bigger than the car
+
+        if not self.road_drawing_ready: # A new road since the last frame: prepare its shapes
+            self.build_road_drawing()
 
         camera_y = self.car.top - CAR_SCREEN_Y # Camera follows the car, keeping it at a fixed height on screen
         camera_x = self.car.left - CAR_SCREEN_X # Camera follows the car, keeping it at a fixed x position on screen
@@ -231,9 +242,15 @@ class CarEnv(gym.Env):
         return normalized_values # [7 rays (in the order of RAY_ANGLES), lane offset, speed, direction]
 
     def reset(self, seed=None, options=None):
-        # put the car back at the start (position, angle, speed), reset the step counter
+        # build the road (random or fixed), put the car back at the start (position, angle, speed), reset the step counter
         # return first observation, info
         super().reset(seed=seed)
+        if self.fixed_road_pieces is not None:
+            pieces = self.fixed_road_pieces # Always the same road (tests, or a road chosen on purpose)
+        else:
+            pieces = random_road_pieces(self.np_random, ROAD_PIECES_COUNT, MIN_CURVE_RADIUS) # A new random road: the agent can't learn one road by heart
+        self.build_road(pieces)
+
         self.car.left = CAR_START_X
         self.car.top = CAR_START_Y
         self.car_x = CAR_START_X
@@ -241,7 +258,8 @@ class CarEnv(gym.Env):
         self.car_angle = CAR_START_ANGLE
         self.car_speed = 0
         self.step_count = 0
-        self.road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery) # Find the index of the nearest point on the road to the car's center
+        self.road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery) # Full search: a new episode, there is no previous index
+
         if self.render_mode == "human": # Gymnasium convention: in human mode the window updates by itself
             self.render()
         return self.get_obs(), {}
@@ -270,7 +288,7 @@ class CarEnv(gym.Env):
         self.car.left = round(self.car_x) # The Rect (whole pixels) follows the true position (decimals): used for drawing and edge checks
         self.car.top = round(self.car_y)
 
-        new_road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery, around=self.road_index, window=RAY_SEARCH_WINDOW) # Update the index of the nearest point on the road to the car's center
+        new_road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery, around=self.road_index, window=CAR_SEARCH_WINDOW) # Update the index of the nearest point on the road to the car's center
         progress = (new_road_index - self.road_index) * POINT_SPACING # Calculate the progress made along the road based on the change in road index
         self.road_index = new_road_index # Update the road index for the next step
 
