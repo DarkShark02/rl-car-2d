@@ -1,7 +1,10 @@
+import math
 from collections import deque
 
 from road import round_up_to_spacing
 
+TURN_RADIUS = 200 # Radius of the center line in a 90° turn (the car, in the right lane, turns on 155 px: wider than MIN_CURVE_RADIUS)
+DIRECTION_ANGLES = {(-1, 0): 90, (1, 0): 270, (0, 1): 0, (0, -1): 180} # (Δrow, Δcolumn) -> angle: up, down, right, left
 
 def random_street_positions(rng, streets_count, min_gap, max_gap):
     # Positions of the streets along one axis: the first at 0, then each one a random gap after the previous
@@ -44,3 +47,31 @@ def find_route(start, goal, rows, columns, rng):
         intersection = came_from[intersection]
     route.reverse() # It was built from the goal backward
     return route
+
+
+def route_to_pieces(route, xs, ys):
+    angles = [] # The direction of every step of the route
+    lengths = [] # The length in pixels of every step
+    for (row_a, col_a), (row_b, col_b) in zip(route, route[1:]):
+        angles.append(DIRECTION_ANGLES[(row_b - row_a, col_b - col_a)]) # The difference between the two intersections tells the direction
+        lengths.append(abs(xs[col_b] - xs[col_a]) + abs(ys[row_b] - ys[row_a])) # Distance between the two intersections
+
+    turns = [] # The turn at every intersection in the middle of the route: 0, +90 (left) or -90 (right)
+    for in_angle, out_angle in zip(angles, angles[1:]):
+        turns.append((out_angle - in_angle + 180) % 360 - 180)
+
+    arc_length = round_up_to_spacing(TURN_RADIUS * math.pi / 2) # Length of a quarter of a circle
+
+    pieces = []
+    straight = lengths[0] # The straight piece we are building
+    for turn, next_length in zip(turns, lengths[1:]):
+        if turn == 0:
+            straight += next_length 
+        else:
+            pieces.append((straight - TURN_RADIUS, 0)) 
+            pieces.append((arc_length, turn)) 
+            straight = next_length - TURN_RADIUS
+    pieces.append((straight, 0)) # The last straight piece
+    return pieces
+
+        
