@@ -9,6 +9,12 @@ from stable_baselines3 import PPO
 
 from car_env import CarEnv
 
+try:
+    from car_env import STALL_SECONDS, STEPS_PER_SECOND
+    STALL_STEPS = STALL_SECONDS * STEPS_PER_SECOND # Steps without progress that end an episode
+except ImportError:
+    STALL_STEPS = None # Older environments had no stall rule
+
 
 def latest_run():
     # The most recent training run in models/checkpoints (by modification time)
@@ -35,14 +41,18 @@ def checkpoint_steps(filename):
 
 
 def outcome_of(env, terminated):
-    # "finish", "off road" or "time out" (also works with the older straight-road environments)
+    # "finish", "off road", "stalled" or "time out" (also works with the older straight-road environments)
     if not terminated:
         return "time out"
     if hasattr(env, "road_points"):
         reached_end = env.road_index == len(env.road_points) - 1
     else:
         reached_end = env.car.top < env.road.top # Old straight road: the finish was the top of the road
-    return "finish" if reached_end else "off road"
+    if reached_end:
+        return "finish"
+    if STALL_STEPS is not None and env.step_noprogress_count >= STALL_STEPS:
+        return "stalled" # Stuck for too long without moving forward
+    return "off road"
 
 
 def play(model, deterministic, render=False, label="", font=None):
@@ -127,7 +137,8 @@ for clip in candidates: # 1. Play every checkpoint without drawing (fast), to ch
 all_frames = []
 for clip in choose_clips(candidates): # 2. Draw only the chosen clips
     print(f'{clip["label"]}: {clip["outcome"]}, reward {clip["reward"]:.1f}')
-    all_frames.extend(play(clip["model"], clip["deterministic"], render=True, label=clip["label"], font=font)[3])
+    label = f'{clip["label"]}: {clip["outcome"]}' # The outcome is known from step 1, so the label can say it from the start
+    all_frames.extend(play(clip["model"], clip["deterministic"], render=True, label=label, font=font)[3])
 
 os.makedirs("videos", exist_ok=True)
 ImageSequenceClip(all_frames, fps=VIDEO_FPS).write_videofile(OUTPUT_PATH, codec="libx264", logger=None)
