@@ -12,7 +12,7 @@ The end goal: stay on the road, stop at red lights, obey traffic signs, and avoi
 A new random road every episode, seen through 7 ray sensors. The agent learns to brake before curves and to keep its lane on roads it has never seen (3x speed).
 
 
-https://github.com/user-attachments/assets/f11758f6-5458-4d79-b899-e7debc6491b4
+https://github.com/user-attachments/assets/23e8d47e-54ea-4f6f-97db-24287d0207a9
 
 
 ### Phase 4.5 — real car physics
