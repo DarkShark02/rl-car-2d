@@ -1,6 +1,9 @@
+import math
+
+import numpy as np
 import pytest
 
-from road import POINT_SPACING, build_center_line, is_on_road, nearest_point_index, offset_line, road_angle, side_offset
+from road import POINT_SPACING, build_center_line, is_on_road, nearest_point_index, offset_line, random_road_pieces, road_angle, side_offset
 
 START = (445, 600)
 UP = 90 # The pen starts pointing up (0° = right, angles grow counterclockwise)
@@ -95,3 +98,22 @@ def test_is_on_road():
     assert is_on_road(points, 445 + 90, 100, 90, around=100, window=10) # Exactly on the right edge
     assert not is_on_road(points, 445 + 91, 100, 90, around=100, window=10) # Just past the right edge
     assert not is_on_road(points, 445 - 91, 100, 90, around=100, window=10) # Just past the left edge
+
+
+def test_random_roads_are_drivable():
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        pieces = random_road_pieces(rng, 16, min_radius=150)
+        assert len(pieces) == 16
+        assert pieces[0][1] == 0 and pieces[-1][1] == 0 # Straight at the start and at the end
+        for length, degrees in pieces:
+            if degrees != 0:
+                assert abs(degrees) >= 20 # No "almost straight" curves
+                assert length % POINT_SPACING == 0 # Whole multiples of the spacing: build_center_line uses every pixel
+                assert length / math.radians(abs(degrees)) >= 150 # Never tighter than min_radius
+
+
+def test_same_seed_same_road():
+    first = random_road_pieces(np.random.default_rng(42), 16, min_radius=150)
+    second = random_road_pieces(np.random.default_rng(42), 16, min_radius=150)
+    assert first == second # A fixed seed always builds the same road: trainings can be repeated

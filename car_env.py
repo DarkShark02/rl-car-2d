@@ -20,6 +20,8 @@ CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the win
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
 CAR_START_ANGLE = ROAD_ANGLE # Starting angle of the car, aligned with the road
 ROAD_PIECES = [(300, 0), (400, -90), (500, 0), (400, 90), (1000, 0)] # Default road: pieces of (length, degrees), + = left turn. Start with a straight piece
+ROAD_PIECES_COUNT = 16 # How many pieces a random road has (about 6000-8000 pixels)
+RAY_SEARCH_WINDOW = 5 # A ray moves POINT_SPACING pixels per step: its nearest road point moves at most ~1 point, so a tiny search is enough
 
 # Car physics: every value is expressed in seconds, then converted to steps (the game runs at 60 steps per second)
 STEPS_PER_SECOND = 60 # Simulation steps in one second of game time
@@ -29,6 +31,7 @@ BRAKE = MAX_SPEED / (2 * STEPS_PER_SECOND) # Full brake: from MAX_SPEED to 0 in 
 FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 in 6 seconds
 CAR_TURN_RADIUS = 2 * CAR_HEIGHT # Tightest circle the car can drive, steering fully: about twice its length (pixels)
 STEER_RATE = math.degrees(1 / CAR_TURN_RADIUS) # Degrees turned per pixel traveled: the same circle at any speed
+MIN_CURVE_RADIUS = 1.5 * CAR_TURN_RADIUS # Random curves are never tighter than this: the car can drive them with some margin
 TIME_LIMIT_FACTOR = 2 # Time limit of an episode: twice the steps needed to drive the whole road at top speed
 BRAKING_DISTANCE = (MAX_SPEED / 2) * (MAX_SPEED / BRAKE) # Average speed while braking × steps needed to stop from top speed
 
@@ -36,7 +39,6 @@ BRAKING_DISTANCE = (MAX_SPEED / 2) * (MAX_SPEED / BRAKE) # Average speed while b
 RAY_LENGTH = 1.25 * BRAKING_DISTANCE # The car sees a bit farther than it needs to stop
 RAY_ANGLES = [-90, -45, -20, 0, 20, 45, 90] # Angles of the rays the car uses to "see" the road, relative to the car's direction (degrees, counterclockwise)
 RAY_STEP = 5 # How many pixels the rays advance at each step, when checking if they hit the road
-SEARCH_WINDOW = int(RAY_LENGTH / POINT_SPACING) + 10 # How many points to search on each side of the car's index: covers the longest ray
 
 # Rewards and penalties: the single source of truth, also imported by test_car_env.py
 OFF_ROAD_PENALTY = 5 # Penalty for going off the road
@@ -221,7 +223,7 @@ class CarEnv(gym.Env):
 
         normalized_ray_length = []
         for angle in RAY_ANGLES:
-            length = ray_length(self.road_points, self.car.centerx, self.car.centery, self.car_angle + angle, RAY_LENGTH, RAY_STEP, ROAD_WIDTH / 2, self.road_index, SEARCH_WINDOW) # Calculate the length of the ray in the given direction, considering the road boundaries and the car's position
+            length = ray_length(self.road_points, self.car.centerx, self.car.centery, self.car_angle + angle, RAY_LENGTH, RAY_STEP, ROAD_WIDTH / 2, self.road_index) # Calculate the length of the ray in the given direction, considering the road boundaries and the car's position
             normalized_ray_length.append(length / RAY_LENGTH) # Normalize the ray length to be between 0 and 1
 
         normalized_values = np.array(normalized_ray_length + [normalized_dist_center_right_lane, normalized_speed, normalized_direction], dtype=np.float32)
@@ -268,7 +270,7 @@ class CarEnv(gym.Env):
         self.car.left = round(self.car_x) # The Rect (whole pixels) follows the true position (decimals): used for drawing and edge checks
         self.car.top = round(self.car_y)
 
-        new_road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery) # Update the index of the nearest point on the road to the car's center
+        new_road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery, around=self.road_index, window=RAY_SEARCH_WINDOW) # Update the index of the nearest point on the road to the car's center
         progress = (new_road_index - self.road_index) * POINT_SPACING # Calculate the progress made along the road based on the change in road index
         self.road_index = new_road_index # Update the road index for the next step
 

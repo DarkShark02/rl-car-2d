@@ -11,8 +11,8 @@ while os.path.exists(f"models/{RUN_PREFIX}{version}.zip") or os.path.exists(f"mo
     version += 1
 RUN_NAME = f"{RUN_PREFIX}{version}" # Name of this training run: used for the final model and the checkpoints folder
 print(f"Training run: {RUN_NAME}")
-TOTAL_STEPS = 300_000 # How long to train: with the car physics (speed, steering) the task is much harder than the 4-direction car
-CHECKPOINT_EVERY = 25_000 # Save a copy of the agent every N steps, to watch or record its progress later (12 checkpoints)
+TOTAL_STEPS = 1_000_000 # How long to train: with the car physics (speed, steering) the task is much harder than the 4-direction car
+CHECKPOINT_EVERY = 50_000 # Save a copy of the agent every N steps, to watch or record its progress later (12 checkpoints)
 SEED = 0 # Fixed seed: the same code gives the same training, so you can tell if a change really helped
 
 env = CarEnv() # The world the agent will learn in
