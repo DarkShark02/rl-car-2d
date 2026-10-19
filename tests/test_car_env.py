@@ -3,7 +3,7 @@ from gymnasium.utils.env_checker import check_env
 
 from car_env import (
     ACCELERATION, CAR_START_ANGLE, CAR_START_X, CAR_START_Y, MAX_SPEED,
-    STEPS_PER_SECOND, CarEnv,
+    STEPS_PER_SECOND, RAY_ANGLES, CarEnv,
 )
 
 # Actions are [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
@@ -15,6 +15,7 @@ RIGHT_THROTTLE = [2, 0]
 LEFT_COAST = [0, 1]
 
 
+LANE, SPEED, DIRECTION = len(RAY_ANGLES), len(RAY_ANGLES) + 1, len(RAY_ANGLES) + 2 # Positions in the observation, after the rays
 STRAIGHT_ROAD = [(5000, 0)] # The rules are tested on a fixed straight road, whatever track the game uses
 
 
@@ -58,7 +59,7 @@ def test_reset_puts_car_back_at_start_and_still(env):
     assert env.car_angle == CAR_START_ANGLE
     assert env.car_speed == 0
     assert env.step_count == 0
-    assert obs[2] == 0 # Lane offset: the car starts centered in the right lane
+    assert obs[LANE] == 0 # Lane offset: the car starts centered in the right lane
 
 
 # --- Speed: throttle, brake, friction ---
@@ -179,13 +180,30 @@ def test_time_limit_truncates_the_episode(env):
     assert steps == env.max_steps
 
 
-# --- Observations: [dist_left, dist_right, lane_offset, speed, direction] ---
+# --- Observations: [7 rays, lane_offset, speed, direction] ---
+
+def test_rays_see_the_road_around_the_car(env):
+    obs = env.get_obs()
+    rays = obs[:len(RAY_ANGLES)]
+    straight_ahead = rays[RAY_ANGLES.index(0)]
+    right_side = rays[RAY_ANGLES.index(-90)]
+    left_side = rays[RAY_ANGLES.index(90)]
+    assert straight_ahead == pytest.approx(1) # A long straight road: the forward ray reaches its maximum length
+    assert right_side < left_side # The car is in the right lane: the grass is closer on the right
+    assert all(0 < ray <= 1 for ray in rays)
+
+
+def test_rays_turn_with_the_car(env):
+    env.car_angle = 0 # The car points right, across the road
+    obs = env.get_obs()
+    straight_ahead = obs[RAY_ANGLES.index(0)]
+    assert straight_ahead < 0.2 # Looking across the road: the grass is close
 
 def test_speed_observation_goes_from_0_to_1(env):
     obs, *_ = env.step(COAST)
-    assert obs[3] == 0 # Still
+    assert obs[SPEED] == 0 # Still
     obs, *_ = repeat(env, THROTTLE, 5 * STEPS_PER_SECOND)
-    assert obs[3] == pytest.approx(1) # Top speed
+    assert obs[SPEED] == pytest.approx(1) # Top speed
 
 
 @pytest.mark.parametrize("angle, expected", [
@@ -197,7 +215,7 @@ def test_speed_observation_goes_from_0_to_1(env):
 ])
 def test_direction_observation_is_relative_to_the_road(env, angle, expected):
     env.car_angle = angle
-    assert env.get_obs()[4] == pytest.approx(expected)
+    assert env.get_obs()[DIRECTION] == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("action", [LEFT_THROTTLE, RIGHT_THROTTLE])

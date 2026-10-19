@@ -3,7 +3,7 @@ import numpy as np
 import gymnasium as gym
 import math
 import os
-from road import build_center_line, nearest_point_index, offset_line, POINT_SPACING, road_angle, side_offset
+from road import build_center_line, nearest_point_index, offset_line, POINT_SPACING, road_angle, side_offset, ray_length
 
 # World constants: the single source of truth, also imported by main.py
 WIDTH, HEIGHT = 800, 600 # Set the width and height of the window
@@ -29,8 +29,14 @@ BRAKE = MAX_SPEED / (2 * STEPS_PER_SECOND) # Full brake: from MAX_SPEED to 0 in 
 FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 in 6 seconds
 CAR_TURN_RADIUS = 2 * CAR_HEIGHT # Tightest circle the car can drive, steering fully: about twice its length (pixels)
 STEER_RATE = math.degrees(1 / CAR_TURN_RADIUS) # Degrees turned per pixel traveled: the same circle at any speed
-
 TIME_LIMIT_FACTOR = 2 # Time limit of an episode: twice the steps needed to drive the whole road at top speed
+BRAKING_DISTANCE = (MAX_SPEED / 2) * (MAX_SPEED / BRAKE) # Average speed while braking × steps needed to stop from top speed
+
+# Sensors: rays that measure how far the road goes around the car
+RAY_LENGTH = 1.25 * BRAKING_DISTANCE # The car sees a bit farther than it needs to stop
+RAY_ANGLES = [-90, -45, -20, 0, 20, 45, 90] # Angles of the rays the car uses to "see" the road, relative to the car's direction (degrees, counterclockwise)
+RAY_STEP = 5 # How many pixels the rays advance at each step, when checking if they hit the road
+SEARCH_WINDOW = int(RAY_LENGTH / POINT_SPACING) + 10 # How many points to search on each side of the car's index: covers the longest ray
 
 # Rewards and penalties: the single source of truth, also imported by test_car_env.py
 OFF_ROAD_PENALTY = 5 # Penalty for going off the road
@@ -105,7 +111,7 @@ class CarEnv(gym.Env):
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
         
         self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)  # Observations: [distance to left edge, distance to right edge, distance to center of right lane, speed, direction], all normalized between -1 and 1
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)  # Observations: [angle distance in 7 rays, distance to center of right lane, speed, direction], all normalized between -1 and 1
         self.step_count = 0 # Initialize the step counter
         self.road_index = 0 # Index of the nearest point on the road to the car's center
 
@@ -204,18 +210,23 @@ class CarEnv(gym.Env):
         return side_offset(self.road_points, self.road_index, self.car.centerx, self.car.centery)
 
     def get_obs(self):
-        # compute the distances from the car to the road edges and the center of the right lane
+        # What the agent sees: 7 rays (how far the road goes in each direction), then lane position, speed and direction
         offset = self.center_offset() # Calculate the offset of the car from the center line of the road at the nearest point
-        normalized_dist_left = (ROAD_WIDTH / 2 + offset - CAR_WIDTH / 2) / ROAD_WIDTH # Distance from the car's left side to the left edge of the road
-        normalized_dist_right = (ROAD_WIDTH / 2 - offset - CAR_WIDTH / 2) / ROAD_WIDTH # Distance from the car's right side to the right edge of the road
+        #normalized_dist_left = (ROAD_WIDTH / 2 + offset - CAR_WIDTH / 2) / ROAD_WIDTH # Distance from the car's left side to the left edge of the road
+        #normalized_dist_right = (ROAD_WIDTH / 2 - offset - CAR_WIDTH / 2) / ROAD_WIDTH # Distance from the car's right side to the right edge of the road
         normalized_dist_center_right_lane = (offset - LANE_WIDTH / 2) / ROAD_WIDTH # Distance from the car's center to the center of the right lane
         normalized_speed = self.car_speed / MAX_SPEED # Normalize the speed
         current_road_angle = road_angle(self.road_points, self.road_index) # Direction of the road where the car is
         normalized_direction = ((self.car_angle - current_road_angle + 180) % 360 - 180) / 180 # Difference from the road direction, always between -1 and +1
 
-        normalized_values = np.array([normalized_dist_left, normalized_dist_right, normalized_dist_center_right_lane, normalized_speed, normalized_direction], dtype=np.float32)
+        normalized_ray_length = []
+        for angle in RAY_ANGLES:
+            length = ray_length(self.road_points, self.car.centerx, self.car.centery, self.car_angle + angle, RAY_LENGTH, RAY_STEP, ROAD_WIDTH / 2, self.road_index, SEARCH_WINDOW) # Calculate the length of the ray in the given direction, considering the road boundaries and the car's position
+            normalized_ray_length.append(length / RAY_LENGTH) # Normalize the ray length to be between 0 and 1
 
-        return normalized_values # Return the normalized distances as the observation
+        normalized_values = np.array(normalized_ray_length + [normalized_dist_center_right_lane, normalized_speed, normalized_direction], dtype=np.float32)
+
+        return normalized_values # [7 rays (in the order of RAY_ANGLES), lane offset, speed, direction]
 
     def reset(self, seed=None, options=None):
         # put the car back at the start (position, angle, speed), reset the step counter

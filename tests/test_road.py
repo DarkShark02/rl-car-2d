@@ -1,6 +1,6 @@
 import pytest
 
-from road import POINT_SPACING, build_center_line, nearest_point_index, offset_line, road_angle, side_offset
+from road import POINT_SPACING, build_center_line, is_on_road, nearest_point_index, offset_line, road_angle, side_offset
 
 START = (445, 600)
 UP = 90 # The pen starts pointing up (0° = right, angles grow counterclockwise)
@@ -74,3 +74,24 @@ def test_offset_line_stays_parallel_to_the_road():
     line = offset_line(turning, 20)
     for i in range(len(turning)):
         assert side_offset(turning, i, *line[i]) == pytest.approx(20) # Always 20 px to the right of the road, even in the curve
+
+
+def test_window_search_gives_the_same_index_as_the_full_search():
+    points = build_center_line([(300, 0), (400, -90), (500, 0)], *START, UP)
+    for i in range(0, len(points), 7):
+        x, y = points[i]
+        assert nearest_point_index(points, x + 10, y, around=i, window=20) == nearest_point_index(points, x + 10, y)
+
+
+def test_window_is_cut_at_the_ends_of_the_road():
+    points = build_center_line([(1000, 0)], *START, UP)
+    assert nearest_point_index(points, 445, 600, around=2, window=10) == 0 # The window can't start before the first point
+    assert nearest_point_index(points, 445, -500, around=198, window=10) == len(points) - 1 # ...or end after the last one
+
+
+def test_is_on_road():
+    points = build_center_line([(1000, 0)], *START, UP)
+    assert is_on_road(points, 445, 100, 90, around=100, window=10) # On the center line
+    assert is_on_road(points, 445 + 90, 100, 90, around=100, window=10) # Exactly on the right edge
+    assert not is_on_road(points, 445 + 91, 100, 90, around=100, window=10) # Just past the right edge
+    assert not is_on_road(points, 445 - 91, 100, 90, around=100, window=10) # Just past the left edge

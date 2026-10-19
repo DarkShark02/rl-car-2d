@@ -2,7 +2,6 @@ import math
 
 POINT_SPACING = 5 # Distance between two points of the center line, in pixels
 
-
 def build_center_line(pieces, start_x, start_y, start_angle):
     # pieces: list of (length, degrees). Returns the list of (x, y) points of the road's center line
     x, y, angle = start_x, start_y, start_angle # The "pen": where it is and where it points
@@ -20,19 +19,27 @@ def build_center_line(pieces, start_x, start_y, start_angle):
     return points
 
 
-def nearest_point_index(points, x, y):
-    # Index of the point of the center line closest to (x, y)
+def nearest_point_index(points, x, y, around=None, window=None):
+    # Index of the point closest to (x, y). If `around` and `window` are given,
+    # search only from around - window to around + window (much faster)
     nearest_index = 0
     nearest_distance = float('inf') # Start with an infinitely large distance
 
-    for i, (px, py) in enumerate(points):
+    if around is not None and window is not None:
+        start = max(0, around - window)
+        end = min(len(points), around + window + 1) # +1 because the end index is exclusive
+        search_points = points[start:end]
+    else:
+        search_points = points
+        start = 0
+
+    for i, (px, py) in enumerate(search_points):
         distance = math.dist((px, py), (x, y)) # Calculate the distance from the point to (x, y)
         if distance < nearest_distance:
             nearest_distance = distance
-            nearest_index = i
+            nearest_index = start +i
 
     return nearest_index
-
 
 def road_angle(points, i):
     # Direction of the road at point i, in degrees (0° = right, counterclockwise)
@@ -62,3 +69,21 @@ def offset_line(points, distance):
         y = py - distance * math.sin(right_dir) # (in pygame, going up means y gets smaller)
         line.append((x, y))
     return line
+
+def is_on_road(points, x, y, half_width, around, window):
+    # True if (x, y) is on the road: closer than half_width to the center line
+    index = nearest_point_index(points, x, y, around, window)
+    offset = side_offset(points, index, x, y)
+    return abs(offset) <= half_width
+
+def ray_length(points, x, y, angle, max_length, step, half_width, around, window):
+    # How far a ray can go from (x, y) in direction `angle` (degrees) before leaving the road, up to max_length
+    distance = 0
+    while distance < max_length:
+        distance += step
+        ray_x = x + distance * math.cos(math.radians(angle))
+        ray_y = y - distance * math.sin(math.radians(angle)) # (in pygame, going up means y gets smaller)
+        if not is_on_road(points, ray_x, ray_y, half_width, around, window):
+            return distance # The last step was off the road
+
+    return max_length # The ray reached its maximum length without leaving the road
