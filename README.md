@@ -12,14 +12,14 @@ The end goal: stay on the road, stop at red lights, obey traffic signs, and avoi
 The agent learns to accelerate, steer and stay in its own lane (3x speed).
 
 
-https://github.com/user-attachments/assets/617fd803-4bc1-484d-9ed8-fa05269e1079
+https://github.com/user-attachments/assets/5dac57af-114c-4ab1-9fa4-d5417ba433e7
 
 
 ### Phase 4 — first steps on a straight road
 From a random agent to a perfect run, one clip every 2,500 training steps (3x speed).
 
 
-https://github.com/user-attachments/assets/5929eeca-17a1-45fe-a904-bfd861a09d6e
+https://github.com/user-attachments/assets/b7041657-cf57-4038-a089-1e70d30efc86
 
 
 ## How it works
