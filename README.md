@@ -11,7 +11,9 @@ The end goal: stay on the road, stop at red lights, obey traffic signs, and avoi
 ### Phase 5 — curves and random roads
 A new random road every episode, seen through 7 ray sensors. The agent learns to brake before curves and to keep its lane on roads it has never seen (3x speed).
 
-<!-- Drag videos/ppo_car_v7_progress.mp4 here in the GitHub editor -->
+
+https://github.com/user-attachments/assets/f11758f6-5458-4d79-b899-e7debc6491b4
+
 
 ### Phase 4.5 — real car physics
 The agent learns to accelerate, steer and stay in its own lane (3x speed).
