@@ -50,14 +50,18 @@ DASH_LINE_LENGTH = CAR_HEIGHT // 2 # Define the length of the dashed lane lines
 DASH_LINE_WIDTH = LINE_WIDTH # Define the width of the dashed lane lines
 DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
 CAR_SCREEN_Y = CAR_START_Y # Fixed height on screen where the car is shown
+CAR_SCREEN_X = CAR_START_X # Fixed x position on screen where the car is shown
 
 CAR_SPRITE_PATH = os.path.join(os.path.dirname(__file__), "assets", "controlled_car.png") # Car image, found next to this file
 CAR_SPRITE_ANGLE = 90 # Direction the car points to in the image (up)
 CAR_SPRITE_QUALITY = 4 # Keep the car image 4x bigger than drawn: rotating a big image and shrinking it looks much smoother
 
-def world_to_screen(rect, camera_y):
-    return rect.move(0, -camera_y) # Convert world coordinates to screen coordinates based on the camera's y position
+def world_to_screen(rect, camera_x, camera_y):
+    return rect.move(-camera_x, -camera_y) # World -> screen: subtract the camera position on both axes
 
+def point_to_screen(point, camera_x, camera_y):
+    x, y = point
+    return (x - camera_x, y - camera_y) # Same as world_to_screen, for a single (x, y) point
 
 class CarEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60} # Gymnasium: supported render modes and speed
@@ -103,18 +107,21 @@ class CarEnv(gym.Env):
             sprite_width = round(CAR_HEIGHT * car_only.get_width() / car_only.get_height()) # Keep the image proportions (option A)
             self.car_sprite = pygame.transform.smoothscale(car_only, (sprite_width * CAR_SPRITE_QUALITY, CAR_HEIGHT * CAR_SPRITE_QUALITY)) # Shrink it, but keep it CAR_SPRITE_QUALITY times bigger than the car
 
-
         camera_y = self.car.top - CAR_SCREEN_Y # Camera follows the car, keeping it at a fixed height on screen
+        camera_x = self.car.left - CAR_SCREEN_X # Camera follows the car, keeping it at a fixed x position on screen
 
         self.screen.fill(GRASS_COLOR) # Fill the screen with green {grass}
-        pygame.draw.rect(self.screen, ROAD_COLOR, world_to_screen(self.road, camera_y)) # Draw the road on the screen
-        pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(self.left_line, camera_y)) # Draw the left lane
-        pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(self.right_line, camera_y)) # Draw the right lane
+        #pygame.draw.rect(self.screen, ROAD_COLOR, world_to_screen(self.road, camera_x, camera_y)) # Draw the road on the screen
+        for point in self.road_points: # Draw the road's center line points
+            pygame.draw.circle(self.screen, ROAD_COLOR, point_to_screen(point, camera_x, camera_y), ROAD_WIDTH // 2) # Draw a circle for each point of the road's center line, with a radius equal to half the road width
+        
+        pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(self.left_line, camera_x, camera_y)) # Draw the left lane
+        pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(self.right_line, camera_x, camera_y)) # Draw the right lane
         for dash_line in self.dash_lines: # Draw each dashed lane line
-            pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(dash_line, camera_y)) # Draw a dashed lane line
+            pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(dash_line, camera_x, camera_y)) # Draw a dashed lane line
         
         rotated = pygame.transform.rotozoom(self.car_sprite, self.car_angle - CAR_SPRITE_ANGLE, 1 / CAR_SPRITE_QUALITY) # 1. Rotate the image like the car (smooth edges) and shrink it to the car size
-        car_center = world_to_screen(self.car, camera_y).center # 2. Where the car's center is on screen
+        car_center = world_to_screen(self.car, camera_x,camera_y).center # 2. Where the car's center is on screen
         self.screen.blit(rotated, rotated.get_rect(center=car_center)) # 3. Paste it with its center on the car's center
 
         if self.render_mode == "human":
