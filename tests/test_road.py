@@ -1,6 +1,6 @@
 import pytest
 
-from road import POINT_SPACING, build_center_line, nearest_point_index, road_angle, side_offset
+from road import POINT_SPACING, build_center_line, nearest_point_index, offset_line, road_angle, side_offset
 
 START = (445, 600)
 UP = 90 # The pen starts pointing up (0° = right, angles grow counterclockwise)
@@ -62,3 +62,15 @@ def test_right_and_left_are_relative_to_the_road_not_the_screen():
     px, py = turning[i]
     assert side_offset(turning, i, px, py + 10) == pytest.approx(10) # Below a road going right = its right side
     assert side_offset(turning, i, px, py - 10) == pytest.approx(-10) # Above it = its left side
+
+
+def test_offset_line_stays_parallel_to_the_road():
+    straight = build_center_line([(1000, 0)], *START, UP)
+    right = offset_line(straight, 20)
+    left = offset_line(straight, -20)
+    assert right[0] == pytest.approx((465, 600)) # 20 px to the right of the start
+    assert left[0] == pytest.approx((425, 600)) # 20 px to the left
+    turning = build_center_line([(300, -90), (300, 0)], *START, UP)
+    line = offset_line(turning, 20)
+    for i in range(len(turning)):
+        assert side_offset(turning, i, *line[i]) == pytest.approx(20) # Always 20 px to the right of the road, even in the curve

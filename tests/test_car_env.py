@@ -2,7 +2,7 @@ import pytest
 from gymnasium.utils.env_checker import check_env
 
 from car_env import (
-    ACCELERATION, CAR_START_ANGLE, CAR_START_X, CAR_START_Y, MAX_SPEED, MAX_STEPS,
+    ACCELERATION, CAR_START_ANGLE, CAR_START_X, CAR_START_Y, MAX_SPEED,
     STEPS_PER_SECOND, CarEnv,
 )
 
@@ -15,10 +15,13 @@ RIGHT_THROTTLE = [2, 0]
 LEFT_COAST = [0, 1]
 
 
+STRAIGHT_ROAD = [(5000, 0)] # The rules are tested on a fixed straight road, whatever track the game uses
+
+
 @pytest.fixture
 def env():
-    # A fresh environment, already reset, for every test
-    env = CarEnv()
+    # A fresh environment on the straight road, already reset, for every test
+    env = CarEnv(road_pieces=STRAIGHT_ROAD)
     env.reset(seed=0)
     return env
 
@@ -147,7 +150,7 @@ def test_reaching_the_end_ends_episode_with_bonus(env):
     obs, reward, terminated, truncated, steps = run_until_done(env, THROTTLE)
     assert terminated and not truncated
     assert reward == pytest.approx(20, abs=0.1) # +20, plus the progress of the last step
-    assert steps < MAX_STEPS
+    assert steps < env.max_steps
 
 
 def test_perfect_run_total_reward(env):
@@ -173,7 +176,7 @@ def test_wall_blocks_the_car_without_ending_the_episode(env):
 def test_time_limit_truncates_the_episode(env):
     obs, reward, terminated, truncated, steps = run_until_done(env, COAST)
     assert truncated and not terminated
-    assert steps == MAX_STEPS
+    assert steps == env.max_steps
 
 
 # --- Observations: [dist_left, dist_right, lane_offset, speed, direction] ---

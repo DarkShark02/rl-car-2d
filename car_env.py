@@ -3,7 +3,7 @@ import numpy as np
 import gymnasium as gym
 import math
 import os
-from road import build_center_line, nearest_point_index, POINT_SPACING, road_angle, side_offset
+from road import build_center_line, nearest_point_index, offset_line, POINT_SPACING, road_angle, side_offset
 
 # World constants: the single source of truth, also imported by main.py
 WIDTH, HEIGHT = 800, 600 # Set the width and height of the window
@@ -13,14 +13,13 @@ LANE_WIDTH = CAR_WIDTH * 3 # Define the width of a lane, triple than the car
 ROAD_WIDTH = LANE_WIDTH * 2 # Define the width of the road  
 RIGHT_LANE_CENTER = WIDTH // 2 + LANE_WIDTH // 2 # Center of the right lane
 LEFT_LANE_CENTER = WIDTH // 2 - LANE_WIDTH // 2 # Center of the left lane
-ROAD_LENGTH = 5000  # Define the length of the road
 ROAD_X = WIDTH // 2 - ROAD_WIDTH // 2 # Left edge of the road, centered horizontally
 ROAD_ANGLE = 90 # The road is vertical, pointing up (0° = right, angles grow counterclockwise)
 CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the car, centered in the right lane
 CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
 CAR_START_ANGLE = ROAD_ANGLE # Starting angle of the car, aligned with the road
-ROAD_PIECES = [(ROAD_LENGTH, 0)] # The road is a straight vertical line, defined by its length and angle
+ROAD_PIECES = [(300, 0), (400, -90), (500, 0), (400, 90), (1000, 0)] # Default road: pieces of (length, degrees), + = left turn. Start with a straight piece
 
 # Car physics: every value is expressed in seconds, then converted to steps (the game runs at 60 steps per second)
 STEPS_PER_SECOND = 60 # Simulation steps in one second of game time
@@ -28,15 +27,16 @@ MAX_SPEED = 8 # Top speed, in pixels per step
 ACCELERATION = MAX_SPEED / (3 * STEPS_PER_SECOND) # Full throttle: from 0 to MAX_SPEED in 3 seconds
 BRAKE = MAX_SPEED / (2 * STEPS_PER_SECOND) # Full brake: from MAX_SPEED to 0 in 2 seconds
 FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 in 6 seconds
-STEER_RATE = 90 / (1 * STEPS_PER_SECOND) / MAX_SPEED # Full steering at MAX_SPEED: a 90° turn in 1 seconds (degrees per pixel traveled)
+CAR_TURN_RADIUS = 2 * CAR_HEIGHT # Tightest circle the car can drive, steering fully: about twice its length (pixels)
+STEER_RATE = math.degrees(1 / CAR_TURN_RADIUS) # Degrees turned per pixel traveled: the same circle at any speed
 
-MAX_STEPS = (ROAD_LENGTH // MAX_SPEED) * 2 # Maximum number of steps before the episode ends
+TIME_LIMIT_FACTOR = 2 # Time limit of an episode: twice the steps needed to drive the whole road at top speed
 
 # Rewards and penalties: the single source of truth, also imported by test_car_env.py
 OFF_ROAD_PENALTY = 5 # Penalty for going off the road
 FINISH_REWARD = 20 # Reward for reaching the end of the road
-ROAD_REWARD = 10 # Reward for reaching the end of the road, scaled by the road length
-MAX_PROGRESS_PER_STEP = MAX_SPEED / ROAD_LENGTH * ROAD_REWARD # Progress reward of one step at top speed
+PROGRESS_REWARD_PER_PIXEL = 10 / 5000 # Reward for each pixel of road driven (5000 px = 10 points), the same on any road
+MAX_PROGRESS_PER_STEP = MAX_SPEED * PROGRESS_REWARD_PER_PIXEL # Progress reward of one step at top speed
 WRONG_WAY_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step in the opposite lane costs twice the best progress: wrong way never pays off
 GRASS_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step with wheels on the grass costs twice the best progress
 
@@ -67,21 +67,20 @@ class CarEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60} # Gymnasium: supported render modes and speed
     #metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 240} # Gymnasium: supported render modes and speed, increased to 240 for faster training
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, road_pieces=ROAD_PIECES):
         # what the agent can do and what it sees (action_space, observation_space)
         # objects that never change: road, lines
         self.render_mode = render_mode # None = no drawing (training), "human" = window, "rgb_array" = image for videos
         self.screen = None # Created only the first time render() is called
         self.clock = None
 
-        self.road_points = build_center_line(ROAD_PIECES, ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE) # Create the road's center line points based on the defined pieces
-        self.road = pygame.Rect(ROAD_X, HEIGHT - ROAD_LENGTH, ROAD_WIDTH, ROAD_LENGTH) # Create a rectangle for the road
-        self.left_line = pygame.Rect(ROAD_X + LINE_OFFSET, HEIGHT - ROAD_LENGTH, LINE_WIDTH, ROAD_LENGTH) # Create a rectangle for the left lane line
-        self.right_line = pygame.Rect(ROAD_X + ROAD_WIDTH - LINE_OFFSET - LINE_WIDTH, HEIGHT - ROAD_LENGTH, LINE_WIDTH, ROAD_LENGTH) # Create a rectangle for the right lane line
-        self.dash_lines = [] # Initialize a list to hold the dashed lane lines
-        for y in range(self.road.bottom - DASH_LINE_LENGTH, self.road.top, -(DASH_LINE_LENGTH + DASH_LINE_GAP)): # Create dashed lane lines along the road
-            dash_line = pygame.Rect(WIDTH // 2 - DASH_LINE_WIDTH // 2, y, DASH_LINE_WIDTH, DASH_LINE_LENGTH) # Create a rectangle for a dashed lane line
-            self.dash_lines.append(dash_line) # Add the dashed lane line to the list
+        self.road_points = build_center_line(road_pieces, ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE) # Create the road's center line points based on the defined pieces
+        self.road_length = sum(length for length, degrees in road_pieces) # Total length of this road: the sum of all its pieces
+        self.max_steps = int(self.road_length / MAX_SPEED * TIME_LIMIT_FACTOR) # Time limit: depends on how long this road is
+        self.road = pygame.Rect(ROAD_X, HEIGHT - self.road_length, ROAD_WIDTH, self.road_length) # Create a rectangle for the road
+        edge_line_distance = ROAD_WIDTH / 2 - LINE_OFFSET - LINE_WIDTH / 2 # From the center line to the middle of each white edge line
+        self.left_line_points = offset_line(self.road_points, -edge_line_distance) # White line along the left edge (negative = left)
+        self.right_line_points = offset_line(self.road_points, edge_line_distance) # White line along the right edge
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
         
         self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
@@ -115,10 +114,17 @@ class CarEnv(gym.Env):
         for point in self.road_points: # Draw the road's center line points
             pygame.draw.circle(self.screen, ROAD_COLOR, point_to_screen(point, camera_x, camera_y), ROAD_WIDTH // 2) # Draw a circle for each point of the road's center line, with a radius equal to half the road width
         
-        pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(self.left_line, camera_x, camera_y)) # Draw the left lane
-        pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(self.right_line, camera_x, camera_y)) # Draw the right lane
-        for dash_line in self.dash_lines: # Draw each dashed lane line
-            pygame.draw.rect(self.screen, LINE_COLOR, world_to_screen(dash_line, camera_x, camera_y)) # Draw a dashed lane line
+        left_line = [point_to_screen(point, camera_x, camera_y) for point in self.left_line_points] # Convert every point of the line to screen coordinates
+        right_line = [point_to_screen(point, camera_x, camera_y) for point in self.right_line_points]
+        pygame.draw.lines(self.screen, LINE_COLOR, False, left_line, LINE_WIDTH) # Draw the left edge line (False = don't close the shape)
+        pygame.draw.lines(self.screen, LINE_COLOR, False, right_line, LINE_WIDTH) # Draw the right edge line
+
+        dash_points = DASH_LINE_LENGTH // POINT_SPACING # How many center line points one dash covers
+        gap_points = DASH_LINE_GAP // POINT_SPACING # How many points the gap between two dashes covers
+        for start in range(0, len(self.road_points) - 1, dash_points + gap_points): # One dash every (dash + gap) points
+            dash = [point_to_screen(point, camera_x, camera_y) for point in self.road_points[start:start + dash_points + 1]] # The points of this dash
+            if len(dash) > 1: # A line needs at least two points
+                pygame.draw.lines(self.screen, LINE_COLOR, False, dash, DASH_LINE_WIDTH) # Draw one dash, following the curve
         
         rotated = pygame.transform.rotozoom(self.car_sprite, self.car_angle - CAR_SPRITE_ANGLE, 1 / CAR_SPRITE_QUALITY) # 1. Rotate the image like the car (smooth edges) and shrink it to the car size
         car_center = world_to_screen(self.car, camera_x,camera_y).center # 2. Where the car's center is on screen
@@ -201,7 +207,7 @@ class CarEnv(gym.Env):
 
         offset = self.center_offset() # Calculate the offset of the car from the center line of the road at the nearest point
 
-        reward = progress / ROAD_LENGTH * ROAD_REWARD # Reward for moving forward, scaled by the road length
+        reward = progress * PROGRESS_REWARD_PER_PIXEL # Reward for moving forward along the road
         reward -= 0.01 * abs(offset - LANE_WIDTH / 2) / (LANE_WIDTH // 2) # Small penalty for being away from the center of the right lane, scaled by half the lane width
         
         if abs(offset) > ROAD_WIDTH / 2 - CAR_WIDTH / 2: # Off road: part of the car is outside the road boundaries
@@ -222,7 +228,7 @@ class CarEnv(gym.Env):
             reward += FINISH_REWARD # Add a reward for successfully reaching the end of the road
 
         self.step_count += 1 # Increment the step counter
-        if self.step_count >= MAX_STEPS: # Check if the maximum number of steps has been reached
+        if self.step_count >= self.max_steps: # Check if the maximum number of steps has been reached
             truncated = True
 
         if self.render_mode == "human": # Gymnasium convention: in human mode the window updates by itself

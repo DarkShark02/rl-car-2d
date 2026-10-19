@@ -51,3 +51,14 @@ def side_offset(points, i, x, y):
     dx = x - px # Arrow from the center line to (x, y): how much it goes right...
     dy_up = py - y # ...and how much it goes up
     return dx * math.cos(right_dir) + dy_up * math.sin(right_dir) # Projection ("shadow") of the arrow on the right direction
+
+
+def offset_line(points, distance):
+    # A line parallel to the center line, `distance` pixels to its right (negative = to its left)
+    line = []
+    for i, (px, py) in enumerate(points):
+        right_dir = math.radians(road_angle(points, i) - 90) # Direction "right" of the road at point i
+        x = px + distance * math.cos(right_dir) # Move `distance` pixels in that direction
+        y = py - distance * math.sin(right_dir) # (in pygame, going up means y gets smaller)
+        line.append((x, y))
+    return line
