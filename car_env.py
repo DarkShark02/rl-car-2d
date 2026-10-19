@@ -49,8 +49,8 @@ LINE_OFFSET = 3 # Define the offset for lane lines from the edge of the road
 DASH_LINE_LENGTH = CAR_HEIGHT // 2 # Define the length of the dashed lane lines
 DASH_LINE_WIDTH = LINE_WIDTH # Define the width of the dashed lane lines
 DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
-CAR_SCREEN_Y = CAR_START_Y # Fixed height on screen where the car is shown
-CAR_SCREEN_X = CAR_START_X # Fixed x position on screen where the car is shown
+CAR_SCREEN_X = WIDTH // 2 - CAR_WIDTH // 2 # The car is drawn at the center of the screen: in curves you see the road in every direction
+CAR_SCREEN_Y = HEIGHT // 2 - CAR_HEIGHT // 2
 
 CAR_SPRITE_PATH = os.path.join(os.path.dirname(__file__), "assets", "controlled_car.png") # Car image, found next to this file
 CAR_SPRITE_ANGLE = 90 # Direction the car points to in the image (up)
