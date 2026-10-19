@@ -3,7 +3,7 @@ from gymnasium.utils.env_checker import check_env
 
 from car_env import (
     ACCELERATION, CAR_START_ANGLE, CAR_START_X, CAR_START_Y, MAX_SPEED,
-    STEPS_PER_SECOND, RAY_ANGLES, CarEnv,
+    CAR_WIDTH, OFF_ROAD_PENALTY, ROAD_WIDTH, ROAD_X, STALL_PENALTY, STALL_SECONDS, STEPS_PER_SECOND, RAY_ANGLES, CarEnv,
 )
 
 # Actions are [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
@@ -16,6 +16,7 @@ LEFT_COAST = [0, 1]
 
 
 LANE, SPEED, DIRECTION = len(RAY_ANGLES), len(RAY_ANGLES) + 1, len(RAY_ANGLES) + 2 # Positions in the observation, after the rays
+ROAD_CENTER_X, ROAD_RIGHT_X = ROAD_X + ROAD_WIDTH / 2, ROAD_X + ROAD_WIDTH # Where the straight test road is
 STRAIGHT_ROAD = [(5000, 0)] # The rules are tested on a fixed straight road, whatever track the game uses
 
 
@@ -125,15 +126,15 @@ def test_moving_forward_centered_earns_progress(env):
 
 
 def test_wrong_way_never_pays_off_even_at_top_speed(env):
-    env.car_x = env.road.centerx - env.car.width / 2 # Car straddling the center line
+    env.car_x = ROAD_CENTER_X - env.car.width / 2 # Car straddling the center line
     env.car_speed = MAX_SPEED # Top speed: the most progress per step
     obs, reward, terminated, truncated, info = env.step(THROTTLE)
-    assert env.car.left < env.road.centerx # Still partly in the opposite lane
+    assert env.car.left < ROAD_CENTER_X # Still partly in the opposite lane
     assert reward < 0 # The wrong-way penalty is bigger than the best possible progress
 
 
 def test_wheels_on_the_grass_cost_a_penalty_but_the_episode_goes_on(env):
-    env.car_x = env.road.right - env.car.width + 10 # Right wheels 10 px on the grass, center still on the road
+    env.car_x = ROAD_RIGHT_X - env.car.width + 10 # Right wheels 10 px on the grass, center still on the road
     env.car_speed = MAX_SPEED # Top speed: the most progress per step
     obs, reward, terminated, truncated, info = env.step(THROTTLE)
     assert not terminated # Only the wheels are out: the episode goes on
@@ -164,20 +165,50 @@ def test_perfect_run_total_reward(env):
     assert total == pytest.approx(29.9, abs=0.05) # 10 for the whole road + 20 for arriving
 
 
-def test_wall_blocks_the_car_without_ending_the_episode(env):
-    env.car_angle = 270 # Point the car down, toward the wall
-    for _ in range(30):
-        obs, reward, terminated, truncated, info = env.step(THROTTLE)
-        assert not terminated
-    assert env.car.bottom == env.road.bottom # Pushed against the wall
-    assert env.car_y == env.car.top # The true position was corrected too, not only the Rect
-    assert env.car_speed == 0 # Hitting the wall stops the car
+def test_driving_back_past_the_start_line_is_off_road(env):
+    env.car_angle = 270 # The car turned around: it points down, back toward the start line
+    obs, reward, terminated, truncated, steps = run_until_done(env, THROTTLE)
+    assert terminated # Behind the start there is no road
+    assert reward == pytest.approx(-OFF_ROAD_PENALTY, abs=0.1)
+    assert steps < STEPS_PER_SECOND # It happens as soon as the car crosses the start line (30 px behind it)
+
+
+def test_no_invisible_wall_on_roads_going_down():
+    env = CarEnv(road_pieces=[(300, 0), (600, -180), (2000, 0)]) # A U-turn: the road comes back down, below the start
+    env.reset(seed=0)
+    env.car_x, env.car_y = env.road_points[-100][0] - CAR_WIDTH / 2, env.road_points[-100][1] - 25 # On the way down, below the start line height
+    env.car_angle = 270 # Driving down, along the road
+    env.road_index = len(env.road_points) - 100
+    env.car_speed = MAX_SPEED
+    env.step(THROTTLE)
+    assert env.car_speed > 0 # Nothing stops the car: the old wall at y = HEIGHT is gone
 
 
 def test_time_limit_truncates_the_episode(env):
-    obs, reward, terminated, truncated, steps = run_until_done(env, COAST)
-    assert truncated and not terminated
+    env.max_steps = 100 # A short time limit, reached while the car is still driving
+    obs, reward, terminated, truncated, steps = run_until_done(env, THROTTLE)
+    assert truncated and not terminated # Out of time: not a success, not a failure
     assert steps == env.max_steps
+
+
+def test_standing_still_for_too_long_is_a_failure(env):
+    obs, reward, terminated, truncated, steps = run_until_done(env, COAST) # Never pressing the throttle
+    assert terminated and not truncated # Stalling ends the episode like going off the road
+    assert steps == STALL_SECONDS * STEPS_PER_SECOND
+    assert reward == pytest.approx(-STALL_PENALTY, abs=0.05)
+
+
+def test_driving_resets_the_stall_counter(env):
+    repeat(env, COAST, STALL_SECONDS * STEPS_PER_SECOND - 1) # Almost stalled...
+    obs, reward, terminated, truncated, info = repeat(env, THROTTLE, STEPS_PER_SECOND) # ...then drive away
+    assert not terminated
+    assert env.step_noprogress_count < STEPS_PER_SECOND # Moving forward resets the counter
+
+
+def test_stall_counter_starts_from_zero_at_every_episode(env):
+    repeat(env, COAST, STALL_SECONDS * STEPS_PER_SECOND - 10) # Stuck for a while...
+    env.reset() # ...new episode
+    assert env.step_noprogress_count == 0
 
 
 # --- Observations: [7 rays, lane_offset, speed, direction] ---

@@ -9,6 +9,7 @@ from stable_baselines3 import PPO
 
 from car_env import CarEnv
 
+
 def latest_run():
     # The most recent training run in models/checkpoints (by modification time)
     runs = [os.path.join("models/checkpoints", name) for name in os.listdir("models/checkpoints")]
@@ -20,13 +21,49 @@ CHECKPOINT_DIR = f"models/checkpoints/{RUN_NAME}"
 OUTPUT_PATH = f"videos/{RUN_NAME}_progress.mp4"
 FRAME_SKIP = 3 # Keep 1 frame out of 3: the video plays at 3x speed, so it stays short
 VIDEO_FPS = 60
+RECORD_SEED = 7 # Every clip drives the same random road (a road never used in training), so the clips can be compared
 MAX_CLIP_SECONDS = 6 # Cut episodes that last longer (e.g. an agent standing still until the time limit)
-SAME_RESULT_TOLERANCE = 0.5 # Two checkpoints with the same outcome and rewards closer than this look the same: the later one is skipped
+HOLD_SECONDS = 1 # Hold the last frame of each clip, so the final result is readable
+TARGET_SECONDS = 30 # The video should last about this long: less important clips are dropped to fit
+CLEAR_IMPROVEMENT = 3 # With the same outcome, a clip is shown only if its reward is at least this much better than every clip before...
+CLEAR_PROGRESS = 0.05 # ...or if it drives at least 5% more of the road
 
 
 def checkpoint_steps(filename):
     # "ppo_car_v2_30000_steps.zip" -> 30000
     return int(re.search(r"_(\d+)_steps\.zip$", filename).group(1))
+
+
+def outcome_of(env, terminated):
+    # "finish", "off road" or "time out" (also works with the older straight-road environments)
+    if not terminated:
+        return "time out"
+    if hasattr(env, "road_points"):
+        reached_end = env.road_index == len(env.road_points) - 1
+    else:
+        reached_end = env.car.top < env.road.top # Old straight road: the finish was the top of the road
+    return "finish" if reached_end else "off road"
+
+
+def play(model, deterministic, render=False, label="", font=None):
+    # Play one episode on the recording road; return (outcome, total reward, steps, frames, share of the road driven)
+    env = CarEnv(render_mode="rgb_array" if render else None)
+    obs, info = env.reset(seed=RECORD_SEED)
+    frames = []
+    total_reward = 0
+    terminated = truncated = False
+    while not (terminated or truncated):
+        action, _ = model.predict(obs, deterministic=deterministic)
+        obs, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
+        if render and (env.step_count % FRAME_SKIP == 0 or terminated or truncated):
+            frames.append(add_label(env.render(), f"{label}   reward: {total_reward:.1f}", font))
+        if env.step_count >= MAX_CLIP_SECONDS * VIDEO_FPS * FRAME_SKIP:
+            break # Long enough for the video
+    if render:
+        frames.extend([frames[-1]] * HOLD_SECONDS * VIDEO_FPS)
+    progress = env.road_index / (len(env.road_points) - 1) if hasattr(env, "road_points") else 0 # Old straight roads: not measured
+    return outcome_of(env, terminated), total_reward, env.step_count, frames, progress
 
 
 def add_label(frame, text, font):
@@ -40,61 +77,59 @@ def add_label(frame, text, font):
     return np.transpose(pygame.surfarray.array3d(surface), (1, 0, 2))
 
 
-def record_episode(model, label, font, deterministic=True):
-    # Play one episode with the given model; return its labeled frames, total reward and outcome
-    env = CarEnv(render_mode="rgb_array")
-    obs, info = env.reset()
-    frames = []
-    total_reward = 0
-    done = False
-    while not done:
-        action, _ = model.predict(obs, deterministic=deterministic)
-        obs, reward, terminated, truncated, info = env.step(action)
-        total_reward += reward
-        done = terminated or truncated
-        if env.step_count % FRAME_SKIP == 0 or done:
-            frames.append(add_label(env.render(), f"{label}   reward: {total_reward:.1f}", font))
-        if len(frames) >= MAX_CLIP_SECONDS * VIDEO_FPS:
-            break
-    frames.extend([frames[-1]] * VIDEO_FPS) # Hold the last frame for 1 second, so the final result is readable
-    if terminated and env.car.top < env.road.top:
-        outcome = "finish"
-    elif terminated:
-        outcome = "off road"
-    else:
-        outcome = "time out"
-    return frames, total_reward, outcome
+def clip_seconds(clip):
+    # How long a clip will last in the video
+    return min(clip["steps"] / FRAME_SKIP / VIDEO_FPS, MAX_CLIP_SECONDS) + HOLD_SECONDS
+
+
+def choose_clips(candidates):
+    # Keep the clips that tell the story: the untrained agent, every clear improvement, the first step back
+    # after learning to finish (learning is not a straight line), and the final result. Then fit TARGET_SECONDS.
+    chosen = [candidates[0]]
+    best = candidates[0]
+    shown_step_back = False
+    for clip in candidates[1:-1]:
+        finishes, best_finishes = clip["outcome"] == "finish", best["outcome"] == "finish"
+        clearly_better = clip["reward"] >= best["reward"] + CLEAR_IMPROVEMENT or clip["progress"] >= best["progress"] + CLEAR_PROGRESS
+        if (finishes and not best_finishes) or (finishes == best_finishes and clearly_better):
+            clip["why"] = "improvement"
+            chosen.append(clip)
+            best = clip
+        elif best_finishes and not finishes and not shown_step_back:
+            clip["why"] = "step back"
+            clip["label"] += " (a step back)"
+            chosen.append(clip)
+            shown_step_back = True
+    chosen.append(candidates[-1]) # The final result is always shown
+
+    while sum(clip_seconds(c) for c in chosen) > TARGET_SECONDS and len(chosen) > 2:
+        middle = chosen[1:-1]
+        step_backs = [c for c in middle if c.get("why") == "step back"]
+        drop = step_backs[0] if step_backs else min(middle[:-1] or middle, key=lambda c: c["reward"]) # First the step back, then the weakest improvement
+        chosen.remove(drop)
+    return chosen
 
 
 pygame.init()
 font = pygame.font.SysFont(None, 32)
 
 env = CarEnv()
-clips = [(PPO("MlpPolicy", env, seed=0), "Untrained (0 steps)", False)] # Start with a random agent (stochastic: it wanders), to show where it all begins
-
-files = sorted(os.listdir(CHECKPOINT_DIR), key=checkpoint_steps)
-for filename in files:
-    steps = checkpoint_steps(filename)
+candidates = [{"model": PPO("MlpPolicy", env, seed=0), "label": "Untrained (0 steps)", "deterministic": False}] # A random agent: where it all begins
+for filename in sorted(os.listdir(CHECKPOINT_DIR), key=checkpoint_steps):
     model = PPO.load(os.path.join(CHECKPOINT_DIR, filename))
     if model.observation_space.shape != env.observation_space.shape: # Old runs were trained on a different world (e.g. 3 observations instead of 5)
         sys.exit(f"{RUN_NAME} was trained on an older version of the environment: record a newer run.")
-    clips.append((model, f"After {steps:,} steps", True)) # Trained agents: their best action
+    candidates.append({"model": model, "label": f"After {checkpoint_steps(filename):,} steps", "deterministic": True})
+
+for clip in candidates: # 1. Play every checkpoint without drawing (fast), to choose what to show
+    clip["outcome"], clip["reward"], clip["steps"], _, clip["progress"] = play(clip["model"], clip["deterministic"])
 
 all_frames = []
-last_kept = None # (outcome, reward) of the last clip added to the video
-for i, (model, label, deterministic) in enumerate(clips):
-    frames, total_reward, outcome = record_episode(model, label, font, deterministic)
-    is_last = i == len(clips) - 1
-    same_as_before = (last_kept is not None and outcome == last_kept[0]
-                      and abs(total_reward - last_kept[1]) < SAME_RESULT_TOLERANCE)
-    if same_as_before and not is_last: # Nothing new to show: skip it (the final checkpoint is always shown)
-        print(f"{label}: {outcome}, reward {total_reward:.2f}  (skipped: same as before)")
-        continue
-    print(f"{label}: {outcome}, reward {total_reward:.2f}")
-    all_frames.extend(frames)
-    last_kept = (outcome, total_reward)
+for clip in choose_clips(candidates): # 2. Draw only the chosen clips
+    print(f'{clip["label"]}: {clip["outcome"]}, reward {clip["reward"]:.1f}')
+    all_frames.extend(play(clip["model"], clip["deterministic"], render=True, label=clip["label"], font=font)[3])
 
 os.makedirs("videos", exist_ok=True)
 ImageSequenceClip(all_frames, fps=VIDEO_FPS).write_videofile(OUTPUT_PATH, codec="libx264", logger=None)
 pygame.quit()
-print(f"Saved {OUTPUT_PATH} ({os.path.getsize(OUTPUT_PATH) / 1_000_000:.1f} MB)")
+print(f"Saved {OUTPUT_PATH} ({os.path.getsize(OUTPUT_PATH) / 1_000_000:.1f} MB, {len(all_frames) / VIDEO_FPS:.0f} s)")

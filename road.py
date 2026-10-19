@@ -121,3 +121,12 @@ def random_road_pieces(rng, pieces_count, min_radius):
             pieces.append((round_up_to_spacing(length), degrees))
     pieces.append((STRAIGHT_START_LENGTH, 0)) # 4. Always end with a straight piece
     return pieces
+
+
+def along_offset(points, i, x, y):
+    # How far (x, y) is ahead of point i, along the direction of the road: positive = ahead, negative = behind
+    forward_dir = math.radians(road_angle(points, i)) # The road's direction at point i
+    px, py = points[i]
+    dx = x - px # Arrow from the center line to (x, y): how much it goes right...
+    dy_up = py - y # ...and how much it goes up
+    return dx * math.cos(forward_dir) + dy_up * math.sin(forward_dir) # Projection ("shadow") of the arrow on the road's direction

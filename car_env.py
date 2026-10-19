@@ -3,7 +3,7 @@ import numpy as np
 import gymnasium as gym
 import math
 import os
-from road import build_center_line, nearest_point_index, offset_line, POINT_SPACING, random_road_pieces, ray_length, road_angle, side_offset
+from road import along_offset, build_center_line, nearest_point_index, offset_line, POINT_SPACING, random_road_pieces, ray_length, road_angle, side_offset
 
 # World constants: the single source of truth, also imported by main.py
 WIDTH, HEIGHT = 800, 600 # Set the width and height of the window
@@ -48,6 +48,8 @@ PROGRESS_REWARD_PER_PIXEL = 10 / 5000 # Reward for each pixel of road driven (50
 MAX_PROGRESS_PER_STEP = MAX_SPEED * PROGRESS_REWARD_PER_PIXEL # Progress reward of one step at top speed
 WRONG_WAY_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step in the opposite lane costs twice the best progress: wrong way never pays off
 GRASS_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step with wheels on the grass costs twice the best progress
+STALL_SECONDS = 3 # If the car is stuck for this many seconds, the episode ends
+STALL_PENALTY = OFF_ROAD_PENALTY # Being stuck counts as a failure, like going off the road
 
 # Drawing constants: only needed to show the world on screen (render)
 GRASS_COLOR = (60, 140, 60) # Define the color for grass
@@ -100,13 +102,13 @@ class CarEnv(gym.Env):
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)  # Observations: [angle distance in 7 rays, distance to center of right lane, speed, direction], all normalized between -1 and 1
         self.step_count = 0 # Initialize the step counter
         self.road_index = 0 # Index of the nearest point on the road to the car's center
+        self.step_noprogress_count = 0 # Count of consecutive steps with no progress (for stalling detection)
 
     def build_road(self, pieces):
         # Everything that depends on the road: rebuilt at every reset, because the road can change
         self.road_points = build_center_line(pieces, ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE) # The road's center line
         self.road_length = sum(length for length, degrees in pieces) # Total length of this road: the sum of all its pieces
         self.max_steps = int(self.road_length / MAX_SPEED * TIME_LIMIT_FACTOR) # Time limit: depends on how long this road is
-        self.road = pygame.Rect(ROAD_X, HEIGHT - self.road_length, ROAD_WIDTH, self.road_length) # Only used for the wall behind the start
         self.road_drawing_ready = False # The shapes to draw are built only when render() needs them: training never draws
 
     def build_road_drawing(self):
@@ -181,7 +183,6 @@ class CarEnv(gym.Env):
         camera_x = self.car.left - CAR_SCREEN_X # Camera follows the car, keeping it at a fixed x position on screen
 
         self.screen.fill(GRASS_COLOR) # Fill the screen with green {grass}
-        #pygame.draw.rect(self.screen, ROAD_COLOR, world_to_screen(self.road, camera_x, camera_y)) # Draw the road on the screen
         road_shape = [point_to_screen(point, camera_x, camera_y) for point in self.road_polygon]
         pygame.draw.polygon(self.screen, ROAD_COLOR, road_shape) # Fill the whole road (straight cut at the start and at the end)
         
@@ -258,6 +259,7 @@ class CarEnv(gym.Env):
         self.car_angle = CAR_START_ANGLE
         self.car_speed = 0
         self.step_count = 0
+        self.step_noprogress_count = 0
         self.road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery) # Full search: a new episode, there is no previous index
 
         if self.render_mode == "human": # Gymnasium convention: in human mode the window updates by itself
@@ -281,9 +283,6 @@ class CarEnv(gym.Env):
         self.car_x += self.car_speed * math.cos(math.radians(self.car_angle)) # Update the car's x position based on its angle and speed
         self.car_y -= self.car_speed * math.sin(math.radians(self.car_angle)) # Update the car's y position based on its angle and speed
 
-        if self.car_y + CAR_HEIGHT > self.road.bottom: # Wall at the bottom: block the car, the episode goes on
-            self.car_y = self.road.bottom - CAR_HEIGHT # Put the car exactly against the wall
-            self.car_speed = 0 # Stop the car if it hits the bottom wall
             
         self.car.left = round(self.car_x) # The Rect (whole pixels) follows the true position (decimals): used for drawing and edge checks
         self.car.top = round(self.car_y)
@@ -306,7 +305,9 @@ class CarEnv(gym.Env):
         terminated = False # Initialize the terminated flag to False
         truncated = False # Initialize the truncated flag to False
 
-        if abs(offset) > ROAD_WIDTH / 2: # Off road: episode fails
+        behind_start = self.road_index == 0 and along_offset(self.road_points, 0, self.car.centerx, self.car.centery) < 0 # Turned around and drove back past the start line
+
+        if abs(offset) > ROAD_WIDTH / 2 or behind_start: # Off road (or behind the start, where there is no road): episode fails
             terminated = True # Set the terminated flag to True
             reward -= OFF_ROAD_PENALTY # Add a penalty for going off the road
 
@@ -314,7 +315,16 @@ class CarEnv(gym.Env):
             terminated = True # Set the terminated flag to True
             reward += FINISH_REWARD # Add a reward for successfully reaching the end of the road
 
+        if progress <= 0: # No progress made in this step
+            self.step_noprogress_count += 1 # Increment the count of consecutive steps with no progress
+            if self.step_noprogress_count >= STALL_SECONDS * STEPS_PER_SECOND: # If the car has been stuck for too long
+                terminated = True # Set the terminated flag to True, ending the episode due to stalling        
+                reward -= STALL_PENALTY # Add a penalty for stalling
+        else:
+            self.step_noprogress_count = 0 # Reset the count if progress is made
+        
         self.step_count += 1 # Increment the step counter
+
         if self.step_count >= self.max_steps: # Check if the maximum number of steps has been reached
             truncated = True
 
