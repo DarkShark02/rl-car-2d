@@ -13,13 +13,14 @@ LANE_WIDTH = CAR_WIDTH * 3 # Define the width of a lane, triple than the car
 ROAD_WIDTH = LANE_WIDTH * 2 # Define the width of the road  
 RIGHT_LANE_CENTER = WIDTH // 2 + LANE_WIDTH // 2 # Center of the right lane
 LEFT_LANE_CENTER = WIDTH // 2 - LANE_WIDTH // 2 # Center of the left lane
+#ROAD_LENGTH = 5000  # Define the length of the road
 ROAD_X = WIDTH // 2 - ROAD_WIDTH // 2 # Left edge of the road, centered horizontally
 ROAD_ANGLE = 90 # The road is vertical, pointing up (0° = right, angles grow counterclockwise)
 CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the car, centered in the right lane
 CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
 CAR_START_ANGLE = ROAD_ANGLE # Starting angle of the car, aligned with the road
-ROAD_PIECES = [(300, 0), (400, -90), (500, 0), (400, 90), (1000, 0)] # Default road: pieces of (length, degrees), + = left turn. Start with a straight piece
+ROAD_PIECES = [(300, 0), (400, -90), (500, 0), (400, 90), (1000, 0)] # The road is a straight vertical line, defined by its length and angle
 
 # Car physics: every value is expressed in seconds, then converted to steps (the game runs at 60 steps per second)
 STEPS_PER_SECOND = 60 # Simulation steps in one second of game time
@@ -30,13 +31,12 @@ FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 i
 CAR_TURN_RADIUS = 2 * CAR_HEIGHT # Tightest circle the car can drive, steering fully: about twice its length (pixels)
 STEER_RATE = math.degrees(1 / CAR_TURN_RADIUS) # Degrees turned per pixel traveled: the same circle at any speed
 
-TIME_LIMIT_FACTOR = 2 # Time limit of an episode: twice the steps needed to drive the whole road at top speed
-
 # Rewards and penalties: the single source of truth, also imported by test_car_env.py
 OFF_ROAD_PENALTY = 5 # Penalty for going off the road
 FINISH_REWARD = 20 # Reward for reaching the end of the road
-PROGRESS_REWARD_PER_PIXEL = 10 / 5000 # Reward for each pixel of road driven (5000 px = 10 points), the same on any road
-MAX_PROGRESS_PER_STEP = MAX_SPEED * PROGRESS_REWARD_PER_PIXEL # Progress reward of one step at top speed
+ROAD_REWARD = 10 # Reward for reaching the end of the road, scaled by the road length
+PROGRESS_REWARD_PER_PIXEL = 10 / 5000 # Reward for each pixel of road driven (5000 px = 10 points, as before)
+MAX_PROGRESS_PER_STEP = MAX_SPEED * PROGRESS_REWARD_PER_PIXEL # The most progress reward in one step
 WRONG_WAY_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step in the opposite lane costs twice the best progress: wrong way never pays off
 GRASS_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step with wheels on the grass costs twice the best progress
 
@@ -75,9 +75,7 @@ class CarEnv(gym.Env):
         self.clock = None
 
         self.road_points = build_center_line(road_pieces, ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE) # Create the road's center line points based on the defined pieces
-        self.road_length = sum(length for length, degrees in road_pieces) # Total length of this road: the sum of all its pieces
-        self.max_steps = int(self.road_length / MAX_SPEED * TIME_LIMIT_FACTOR) # Time limit: depends on how long this road is
-        self.road = pygame.Rect(ROAD_X, HEIGHT - self.road_length, ROAD_WIDTH, self.road_length) # Create a rectangle for the road
+        self.road = pygame.Rect(ROAD_X, HEIGHT - ROAD_LENGTH, ROAD_WIDTH, ROAD_LENGTH) # Create a rectangle for the road
         edge_line_distance = ROAD_WIDTH / 2 - LINE_OFFSET - LINE_WIDTH / 2 # From the center line to the middle of each white edge line
         self.left_line_points = offset_line(self.road_points, -edge_line_distance) # White line along the left edge (negative = left)
         self.right_line_points = offset_line(self.road_points, edge_line_distance) # White line along the right edge
@@ -87,6 +85,7 @@ class CarEnv(gym.Env):
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)  # Observations: [distance to left edge, distance to right edge, distance to center of right lane, speed, direction], all normalized between -1 and 1
         self.step_count = 0 # Initialize the step counter
         self.road_index = 0 # Index of the nearest point on the road to the car's center
+        self.max_steps
 
     def render(self):
         if self.render_mode is None:
@@ -207,7 +206,7 @@ class CarEnv(gym.Env):
 
         offset = self.center_offset() # Calculate the offset of the car from the center line of the road at the nearest point
 
-        reward = progress * PROGRESS_REWARD_PER_PIXEL # Reward for moving forward along the road
+        reward = progress / ROAD_LENGTH * ROAD_REWARD # Reward for moving forward, scaled by the road length
         reward -= 0.01 * abs(offset - LANE_WIDTH / 2) / (LANE_WIDTH // 2) # Small penalty for being away from the center of the right lane, scaled by half the lane width
         
         if abs(offset) > ROAD_WIDTH / 2 - CAR_WIDTH / 2: # Off road: part of the car is outside the road boundaries
@@ -228,7 +227,7 @@ class CarEnv(gym.Env):
             reward += FINISH_REWARD # Add a reward for successfully reaching the end of the road
 
         self.step_count += 1 # Increment the step counter
-        if self.step_count >= self.max_steps: # Check if the maximum number of steps has been reached
+        if self.step_count >= MAX_STEPS: # Check if the maximum number of steps has been reached
             truncated = True
 
         if self.render_mode == "human": # Gymnasium convention: in human mode the window updates by itself
