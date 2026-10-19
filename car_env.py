@@ -52,12 +52,23 @@ DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
 CAR_SCREEN_X = WIDTH // 2 - CAR_WIDTH // 2 # The car is drawn at the center of the screen: in curves you see the road in every direction
 CAR_SCREEN_Y = HEIGHT // 2 - CAR_HEIGHT // 2
 
+START_LINE_WIDTH = LINE_WIDTH # The start line is as thick as the edge lines
+CHECKER_SIZE = 10 # Side of one square of the checkered finish line, in pixels
+CHECKER_ROWS = 2 # How many rows of squares the finish line has
+CHECKER_COLORS = ((255, 255, 255), (20, 20, 20)) # White and black squares
+
 CAR_SPRITE_PATH = os.path.join(os.path.dirname(__file__), "assets", "controlled_car.png") # Car image, found next to this file
 CAR_SPRITE_ANGLE = 90 # Direction the car points to in the image (up)
 CAR_SPRITE_QUALITY = 4 # Keep the car image 4x bigger than drawn: rotating a big image and shrinking it looks much smoother
 
 def world_to_screen(rect, camera_x, camera_y):
     return rect.move(-camera_x, -camera_y) # World -> screen: subtract the camera position on both axes
+
+def move(point, angle, distance):
+    # The point `distance` pixels away from `point` in direction `angle` (radians; negative distance = backward)
+    x, y = point
+    return (x + distance * math.cos(angle), y - distance * math.sin(angle))
+
 
 def point_to_screen(point, camera_x, camera_y):
     x, y = point
@@ -78,15 +89,56 @@ class CarEnv(gym.Env):
         self.road_length = sum(length for length, degrees in road_pieces) # Total length of this road: the sum of all its pieces
         self.max_steps = int(self.road_length / MAX_SPEED * TIME_LIMIT_FACTOR) # Time limit: depends on how long this road is
         self.road = pygame.Rect(ROAD_X, HEIGHT - self.road_length, ROAD_WIDTH, self.road_length) # Create a rectangle for the road
-        edge_line_distance = ROAD_WIDTH / 2 - LINE_OFFSET - LINE_WIDTH / 2 # From the center line to the middle of each white edge line
-        self.left_line_points = offset_line(self.road_points, -edge_line_distance) # White line along the left edge (negative = left)
-        self.right_line_points = offset_line(self.road_points, edge_line_distance) # White line along the right edge
+        outer = ROAD_WIDTH / 2 - LINE_OFFSET # From the center line to the outer side of each white edge line
+        inner = outer - LINE_WIDTH # ...and to its inner side
+        self.left_line_shape = self.line_shape(-outer, -inner) # White line along the left edge (negative = left), as an exact strip
+        self.right_line_shape = self.line_shape(inner, outer) # White line along the right edge
+
+        # The road as one shape: along the left edge from start to end, then back along the right edge (like drawing an outline without lifting the pen)
+        self.road_polygon = offset_line(self.road_points, -ROAD_WIDTH / 2) + offset_line(self.road_points, ROAD_WIDTH / 2)[::-1]
+        start_dir = math.radians(road_angle(self.road_points, 0)) # Direction of the road at the start
+        line_span = outer # The start line goes from the outer side of one edge line to the other
+        left_start, right_start = offset_line(self.road_points[:2], -line_span)[0], offset_line(self.road_points[:2], line_span)[0] # Outer sides of the edge lines, at the first point
+        near, far = LINE_OFFSET, LINE_OFFSET + START_LINE_WIDTH # The start line begins after the same grey margin as the sides
+        self.start_line = [move(left_start, start_dir, near), move(right_start, start_dir, near), move(right_start, start_dir, far), move(left_start, start_dir, far)] # Exact rectangle across the road
+        self.finish_squares = self.build_finish_squares() # Checkered squares across the road at its last point
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
         
         self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(5,), dtype=np.float32)  # Observations: [distance to left edge, distance to right edge, distance to center of right lane, speed, direction], all normalized between -1 and 1
         self.step_count = 0 # Initialize the step counter
         self.road_index = 0 # Index of the nearest point on the road to the car's center
+
+    def line_shape(self, side_a, side_b):
+        # A white strip running along the road between two side distances, stopping LINE_OFFSET before both ends (the same grey margin as on the sides)
+        start_dir = math.radians(road_angle(self.road_points, 0))
+        end_dir = math.radians(road_angle(self.road_points, len(self.road_points) - 1))
+        def trimmed(line):
+            return [move(line[0], start_dir, LINE_OFFSET)] + line[1:-1] + [move(line[-1], end_dir, -LINE_OFFSET)]
+        return trimmed(offset_line(self.road_points, side_a)) + trimmed(offset_line(self.road_points, side_b))[::-1] # Along one side, back along the other
+
+    def build_finish_squares(self):
+        # Checkered finish line: rows of squares across the road, with a grey margin before the end of the road
+        end_x, end_y = self.road_points[-1]
+        forward = math.radians(road_angle(self.road_points, len(self.road_points) - 1)) # Direction of the road at the end
+        right = forward - math.pi / 2 # Direction "right" of the road
+        fx, fy = math.cos(forward), -math.sin(forward) # One pixel forward, in screen coordinates (y goes down)
+        rx, ry = math.cos(right), -math.sin(right) # One pixel to the right
+        line_span = ROAD_WIDTH / 2 - LINE_OFFSET # The checkers cover the road between the grey margins, like the edge lines
+        columns = int(2 * line_span // CHECKER_SIZE)
+        square_width = 2 * line_span / columns # Slightly wider than CHECKER_SIZE, so the columns fill the space between the grey margins exactly
+        squares = []
+        for row in range(CHECKER_ROWS):
+            for column in range(columns):
+                back = LINE_OFFSET + (row + 1) * CHECKER_SIZE # Rows go back from the end of the road, after a grey margin
+                side = -line_span + column * square_width # Columns go from the left margin to the right margin
+                corners = []
+                for dback, dside in ((0, 0), (0, square_width), (CHECKER_SIZE, square_width), (CHECKER_SIZE, 0)):
+                    distance_back = back - dback
+                    distance_side = side + dside
+                    corners.append((end_x - fx * distance_back + rx * distance_side, end_y - fy * distance_back + ry * distance_side))
+                squares.append((corners, CHECKER_COLORS[(row + column) % 2])) # Alternate colors like a chessboard
+        return squares
 
     def render(self):
         if self.render_mode is None:
@@ -111,21 +163,25 @@ class CarEnv(gym.Env):
 
         self.screen.fill(GRASS_COLOR) # Fill the screen with green {grass}
         #pygame.draw.rect(self.screen, ROAD_COLOR, world_to_screen(self.road, camera_x, camera_y)) # Draw the road on the screen
-        for point in self.road_points: # Draw the road's center line points
-            pygame.draw.circle(self.screen, ROAD_COLOR, point_to_screen(point, camera_x, camera_y), ROAD_WIDTH // 2) # Draw a circle for each point of the road's center line, with a radius equal to half the road width
+        road_shape = [point_to_screen(point, camera_x, camera_y) for point in self.road_polygon]
+        pygame.draw.polygon(self.screen, ROAD_COLOR, road_shape) # Fill the whole road (straight cut at the start and at the end)
         
-        left_line = [point_to_screen(point, camera_x, camera_y) for point in self.left_line_points] # Convert every point of the line to screen coordinates
-        right_line = [point_to_screen(point, camera_x, camera_y) for point in self.right_line_points]
-        pygame.draw.lines(self.screen, LINE_COLOR, False, left_line, LINE_WIDTH) # Draw the left edge line (False = don't close the shape)
-        pygame.draw.lines(self.screen, LINE_COLOR, False, right_line, LINE_WIDTH) # Draw the right edge line
+        for shape in (self.left_line_shape, self.right_line_shape): # The two white edge lines
+            pygame.draw.polygon(self.screen, LINE_COLOR, [point_to_screen(point, camera_x, camera_y) for point in shape]) # Convert every point to the screen and fill the strip
 
         dash_points = DASH_LINE_LENGTH // POINT_SPACING # How many center line points one dash covers
         gap_points = DASH_LINE_GAP // POINT_SPACING # How many points the gap between two dashes covers
-        for start in range(0, len(self.road_points) - 1, dash_points + gap_points): # One dash every (dash + gap) points
-            dash = [point_to_screen(point, camera_x, camera_y) for point in self.road_points[start:start + dash_points + 1]] # The points of this dash
+        first_dash = math.ceil((LINE_OFFSET + START_LINE_WIDTH) / POINT_SPACING) # Dashes start after the start line...
+        last_dash = len(self.road_points) - 1 - math.ceil((LINE_OFFSET + CHECKER_ROWS * CHECKER_SIZE) / POINT_SPACING) # ...and stop before the finish line
+        for start in range(first_dash, last_dash, dash_points + gap_points): # One dash every (dash + gap) points
+            dash = [point_to_screen(point, camera_x, camera_y) for point in self.road_points[start:min(start + dash_points, last_dash) + 1]] # The points of this dash
             if len(dash) > 1: # A line needs at least two points
                 pygame.draw.lines(self.screen, LINE_COLOR, False, dash, DASH_LINE_WIDTH) # Draw one dash, following the curve
         
+        pygame.draw.polygon(self.screen, LINE_COLOR, [point_to_screen(point, camera_x, camera_y) for point in self.start_line]) # White start line across the road
+        for corners, color in self.finish_squares: # Checkered finish line
+            pygame.draw.polygon(self.screen, color, [point_to_screen(point, camera_x, camera_y) for point in corners])
+
         rotated = pygame.transform.rotozoom(self.car_sprite, self.car_angle - CAR_SPRITE_ANGLE, 1 / CAR_SPRITE_QUALITY) # 1. Rotate the image like the car (smooth edges) and shrink it to the car size
         car_center = world_to_screen(self.car, camera_x,camera_y).center # 2. Where the car's center is on screen
         self.screen.blit(rotated, rotated.get_rect(center=car_center)) # 3. Paste it with its center on the car's center
