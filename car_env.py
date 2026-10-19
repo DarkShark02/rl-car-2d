@@ -3,6 +3,7 @@ import numpy as np
 import gymnasium as gym
 import math
 import os
+from city import TURN_RADIUS, random_city
 from road import along_offset, build_center_line, nearest_point_index, offset_line, POINT_SPACING, random_road_pieces, ray_length, road_angle, side_offset
 
 # World constants: the single source of truth, also imported by main.py
@@ -19,6 +20,7 @@ CAR_START_X = RIGHT_LANE_CENTER - CAR_WIDTH // 2 # Starting x position of the ca
 CAR_BOTTOM_MARGIN = 5 # Offset for the car's position from the bottom of the window
 CAR_START_Y = HEIGHT - (CAR_HEIGHT + CAR_BOTTOM_MARGIN) # Starting y position of the car, at the bottom
 CAR_START_ANGLE = ROAD_ANGLE # Starting angle of the car, aligned with the road
+CAR_START_AHEAD = HEIGHT - CAR_START_Y - CAR_HEIGHT // 2 # How far after the start line the car's center starts (30 px)
 ROAD_PIECES = [(300, 0), (400, -90), (500, 0), (400, 90), (1000, 0)] # A fixed test road, never used in training: to check that the agent can drive a road it has never seen
 ROAD_PIECES_COUNT = 16 # How many pieces a random road has (about 6000-8000 pixels)
 RAY_SEARCH_WINDOW = 5 # A ray moves POINT_SPACING pixels per step: its nearest road point moves at most ~1 point, so a tiny search is enough
@@ -63,6 +65,14 @@ DASH_LINE_GAP = DASH_LINE_LENGTH // 2 # Define the gap between dashed lane lines
 CAR_SCREEN_X = WIDTH // 2 - CAR_WIDTH // 2 # The car is drawn at the center of the screen: in curves you see the road in every direction
 CAR_SCREEN_Y = HEIGHT // 2 - CAR_HEIGHT // 2
 
+SIDEWALK_COLOR = (170, 170, 165) # City blocks: the sidewalk around the buildings
+BUILDING_COLORS = ((120, 105, 95), (140, 120, 100), (105, 110, 125), (130, 95, 90)) # Roofs, seen from above
+SIDEWALK_WIDTH = 15 # From the edge of the street to the buildings
+BLOCK_CORNER_RADIUS = TURN_RADIUS - ROAD_WIDTH // 2 # Rounded corners: exactly the inner edge of a 90° turn of the road
+STOP_LINE_WIDTH = 2 * LINE_WIDTH # Stop lines at the intersections: thicker than the other lines
+STOP_LINE_DISTANCE = TURN_RADIUS # From the center of an intersection to its stop lines: where the rounded corners begin
+GOAL_COLOR = (240, 200, 40) # The goal of a city route: a yellow circle at the end of the route, in the right lane
+GOAL_RADIUS = LANE_WIDTH // 2 - LINE_OFFSET - LINE_WIDTH - 2 # Fits inside the lane, without covering the white edge line
 START_LINE_WIDTH = LINE_WIDTH # The start line is as thick as the edge lines
 CHECKER_SIZE = 10 # Side of one square of the checkered finish line, in pixels
 CHECKER_ROWS = 2 # How many rows of squares the finish line has
@@ -89,12 +99,13 @@ class CarEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60} # Gymnasium: supported render modes and speed
     #metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 240} # Gymnasium: supported render modes and speed, increased to 240 for faster training
 
-    def __init__(self, render_mode=None, road_pieces=None):
+    def __init__(self, render_mode=None, road_pieces=None, world="city"):
         # what the agent can do and what it sees (action_space, observation_space); the road itself is built at every reset
         self.render_mode = render_mode # None = no drawing (training), "human" = window, "rgb_array" = image for videos
         self.screen = None # Created only the first time render() is called
         self.clock = None
         self.fixed_road_pieces = road_pieces # None = a new random road at every reset; a list of pieces = always that road
+        self.world = world # Random roads: "city" (streets and 90° turns) or "country" (long curves)
 
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
 
@@ -104,9 +115,10 @@ class CarEnv(gym.Env):
         self.road_index = 0 # Index of the nearest point on the road to the car's center
         self.step_noprogress_count = 0 # Count of consecutive steps with no progress (for stalling detection)
 
-    def build_road(self, pieces):
-        # Everything that depends on the road: rebuilt at every reset, because the road can change
-        self.road_points = build_center_line(pieces, ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE) # The road's center line
+    def build_road(self, pieces, start=(ROAD_X + ROAD_WIDTH // 2, HEIGHT, ROAD_ANGLE)):
+        # Everything that depends on the road: rebuilt at every reset, because the road can change.
+        # start = (x, y, angle) where the center line begins: by default the bottom of the screen, pointing up
+        self.road_points = build_center_line(pieces, *start) # The road's center line
         self.road_length = sum(length for length, degrees in pieces) # Total length of this road: the sum of all its pieces
         self.max_steps = int(self.road_length / MAX_SPEED * TIME_LIMIT_FACTOR) # Time limit: depends on how long this road is
         self.road_drawing_ready = False # The shapes to draw are built only when render() needs them: training never draws
@@ -158,6 +170,71 @@ class CarEnv(gym.Env):
                 squares.append((corners, CHECKER_COLORS[(row + column) % 2])) # Alternate colors like a chessboard
         return squares
 
+    def draw_road(self, camera_x, camera_y):
+        # A single road (country roads and tests): asphalt, white edge lines, dashed center line
+        road_shape = [point_to_screen(point, camera_x, camera_y) for point in self.road_polygon]
+        pygame.draw.polygon(self.screen, ROAD_COLOR, road_shape) # Fill the whole road (straight cut at the start and at the end)
+        
+        for shape in (self.left_line_shape, self.right_line_shape): # The two white edge lines
+            pygame.draw.polygon(self.screen, LINE_COLOR, [point_to_screen(point, camera_x, camera_y) for point in shape]) # Convert every point to the screen and fill the strip
+
+        dash_points = DASH_LINE_LENGTH // POINT_SPACING # How many center line points one dash covers
+        gap_points = DASH_LINE_GAP // POINT_SPACING # How many points the gap between two dashes covers
+        first_dash = math.ceil((LINE_OFFSET + START_LINE_WIDTH) / POINT_SPACING) # Dashes start after the start line...
+        last_dash = len(self.road_points) - 1 - math.ceil((LINE_OFFSET + CHECKER_ROWS * CHECKER_SIZE) / POINT_SPACING) # ...and stop before the finish line
+        for start in range(first_dash, last_dash, dash_points + gap_points): # One dash every (dash + gap) points
+            dash = [point_to_screen(point, camera_x, camera_y) for point in self.road_points[start:min(start + dash_points, last_dash) + 1]] # The points of this dash
+            if len(dash) > 1: # A line needs at least two points
+                pygame.draw.lines(self.screen, LINE_COLOR, False, dash, DASH_LINE_WIDTH) # Draw one dash, following the curve
+
+    def draw_city(self, camera_x, camera_y):
+        # The whole city around the route: asphalt everywhere, blocks with rounded corners, white edge lines and dashed center lines
+        xs, ys = self.city["xs"], self.city["ys"]
+        half = ROAD_WIDTH // 2
+
+        def screen_rect(left, top, right, bottom): # A world rectangle, on the screen
+            return pygame.Rect(round(left - camera_x), round(top - camera_y), round(right - left), round(bottom - top))
+
+        city_area = screen_rect(xs[0] - half, ys[0] - half, xs[-1] + half, ys[-1] + half)
+        pygame.draw.rect(self.screen, ROAD_COLOR, city_area) # Every street and intersection
+        edge = LINE_OFFSET + LINE_WIDTH
+        pygame.draw.rect(self.screen, LINE_COLOR, city_area.inflate(-2 * LINE_OFFSET, -2 * LINE_OFFSET), LINE_WIDTH) # Edge line along the outer streets
+
+        for row in range(len(ys) - 1):
+            for column in range(len(xs) - 1):
+                block = screen_rect(xs[column] + half, ys[row] + half, xs[column + 1] - half, ys[row + 1] - half)
+                pygame.draw.rect(self.screen, LINE_COLOR, block.inflate(2 * edge, 2 * edge), LINE_WIDTH, border_radius=BLOCK_CORNER_RADIUS + edge) # Edge line around the block
+                pygame.draw.rect(self.screen, SIDEWALK_COLOR, block, border_radius=BLOCK_CORNER_RADIUS) # Sidewalk
+                roof = BUILDING_COLORS[(row * 7 + column * 3) % len(BUILDING_COLORS)] # A different roof color for each block
+                pygame.draw.rect(self.screen, roof, block.inflate(-2 * SIDEWALK_WIDTH, -2 * SIDEWALK_WIDTH), border_radius=max(0, BLOCK_CORNER_RADIUS - SIDEWALK_WIDTH)) # Buildings
+
+        step = DASH_LINE_LENGTH + DASH_LINE_GAP
+        margin = STOP_LINE_WIDTH + DASH_LINE_GAP # Dashes start a little after a stop line and end a little before the next one
+        for y in ys: # Dashed center line of every horizontal street, from one stop line to the next
+            for x_from, x_to in zip(xs, xs[1:]):
+                for x in range(x_from + STOP_LINE_DISTANCE + margin, x_to - STOP_LINE_DISTANCE - margin - DASH_LINE_LENGTH + 1, step):
+                    pygame.draw.rect(self.screen, LINE_COLOR, screen_rect(x, y - DASH_LINE_WIDTH / 2, x + DASH_LINE_LENGTH, y + DASH_LINE_WIDTH / 2))
+        for x in xs: # ...and of every vertical street
+            for y_from, y_to in zip(ys, ys[1:]):
+                for y in range(y_from + STOP_LINE_DISTANCE + margin, y_to - STOP_LINE_DISTANCE - margin - DASH_LINE_LENGTH + 1, step):
+                    pygame.draw.rect(self.screen, LINE_COLOR, screen_rect(x - DASH_LINE_WIDTH / 2, y, x + DASH_LINE_WIDTH / 2, y + DASH_LINE_LENGTH))
+
+        lane_edge = half - LINE_OFFSET - LINE_WIDTH # From the center line to the inner side of the white edge line
+        for row, y in enumerate(ys): # Stop lines: on every street that enters an intersection, across the lane of the cars arriving
+            for column, x in enumerate(xs):
+                d, w = STOP_LINE_DISTANCE, STOP_LINE_WIDTH
+                if column > 0: # Arriving from the left (driving right): the right lane is below the center line
+                    pygame.draw.rect(self.screen, LINE_COLOR, screen_rect(x - d - w, y, x - d, y + lane_edge))
+                if column < len(xs) - 1: # Arriving from the right (driving left): the right lane is above
+                    pygame.draw.rect(self.screen, LINE_COLOR, screen_rect(x + d, y - lane_edge, x + d + w, y))
+                if row > 0: # Arriving from above (driving down): the right lane is on the left of the screen
+                    pygame.draw.rect(self.screen, LINE_COLOR, screen_rect(x - lane_edge, y - d - w, x, y - d))
+                if row < len(ys) - 1: # Arriving from below (driving up): the right lane is on the right
+                    pygame.draw.rect(self.screen, LINE_COLOR, screen_rect(x, y + d, x + lane_edge, y + d + w))
+
+        goal_x, goal_y = offset_line(self.road_points[-2:], LANE_WIDTH / 2)[-1] # The goal: a yellow circle at the end of the route, in the right lane
+        pygame.draw.circle(self.screen, GOAL_COLOR, (goal_x - camera_x, goal_y - camera_y), GOAL_RADIUS)
+
     def render(self):
         if self.render_mode is None:
             return # Training: nothing to draw
@@ -183,24 +260,16 @@ class CarEnv(gym.Env):
         camera_x = self.car.left - CAR_SCREEN_X # Camera follows the car, keeping it at a fixed x position on screen
 
         self.screen.fill(GRASS_COLOR) # Fill the screen with green {grass}
-        road_shape = [point_to_screen(point, camera_x, camera_y) for point in self.road_polygon]
-        pygame.draw.polygon(self.screen, ROAD_COLOR, road_shape) # Fill the whole road (straight cut at the start and at the end)
-        
-        for shape in (self.left_line_shape, self.right_line_shape): # The two white edge lines
-            pygame.draw.polygon(self.screen, LINE_COLOR, [point_to_screen(point, camera_x, camera_y) for point in shape]) # Convert every point to the screen and fill the strip
+        if self.city is not None:
+            self.draw_city(camera_x, camera_y) # The city's streets already contain the route
+        else:
+            self.draw_road(camera_x, camera_y)
 
-        dash_points = DASH_LINE_LENGTH // POINT_SPACING # How many center line points one dash covers
-        gap_points = DASH_LINE_GAP // POINT_SPACING # How many points the gap between two dashes covers
-        first_dash = math.ceil((LINE_OFFSET + START_LINE_WIDTH) / POINT_SPACING) # Dashes start after the start line...
-        last_dash = len(self.road_points) - 1 - math.ceil((LINE_OFFSET + CHECKER_ROWS * CHECKER_SIZE) / POINT_SPACING) # ...and stop before the finish line
-        for start in range(first_dash, last_dash, dash_points + gap_points): # One dash every (dash + gap) points
-            dash = [point_to_screen(point, camera_x, camera_y) for point in self.road_points[start:min(start + dash_points, last_dash) + 1]] # The points of this dash
-            if len(dash) > 1: # A line needs at least two points
-                pygame.draw.lines(self.screen, LINE_COLOR, False, dash, DASH_LINE_WIDTH) # Draw one dash, following the curve
-        
-        pygame.draw.polygon(self.screen, LINE_COLOR, [point_to_screen(point, camera_x, camera_y) for point in self.start_line]) # White start line across the road
-        for corners, color in self.finish_squares: # Checkered finish line
-            pygame.draw.polygon(self.screen, color, [point_to_screen(point, camera_x, camera_y) for point in corners])
+        if self.city is None: # In the city the route starts in the middle of an intersection: no start line there
+            pygame.draw.polygon(self.screen, LINE_COLOR, [point_to_screen(point, camera_x, camera_y) for point in self.start_line]) # White start line across the road
+        if self.city is None: # In the city the goal is the yellow circle, drawn with the city
+            for corners, color in self.finish_squares: # Checkered finish line
+                pygame.draw.polygon(self.screen, color, [point_to_screen(point, camera_x, camera_y) for point in corners])
 
         rotated = pygame.transform.rotozoom(self.car_sprite, self.car_angle - CAR_SPRITE_ANGLE, 1 / CAR_SPRITE_QUALITY) # 1. Rotate the image like the car (smooth edges) and shrink it to the car size
         car_center = world_to_screen(self.car, camera_x,camera_y).center # 2. Where the car's center is on screen
@@ -246,17 +315,26 @@ class CarEnv(gym.Env):
         # build the road (random or fixed), put the car back at the start (position, angle, speed), reset the step counter
         # return first observation, info
         super().reset(seed=seed)
+        self.city = None # Only set in the city world: the streets to draw around the route
         if self.fixed_road_pieces is not None:
-            pieces = self.fixed_road_pieces # Always the same road (tests, or a road chosen on purpose)
+            self.build_road(self.fixed_road_pieces) # Always the same road (tests, or a road chosen on purpose)
+        elif self.world == "city":
+            self.city = random_city(self.np_random) # A new random city, and a route through it
+            self.build_road(self.city["pieces"], self.city["start"])
         else:
-            pieces = random_road_pieces(self.np_random, ROAD_PIECES_COUNT, MIN_CURVE_RADIUS) # A new random road: the agent can't learn one road by heart
-        self.build_road(pieces)
+            self.build_road(random_road_pieces(self.np_random, ROAD_PIECES_COUNT, MIN_CURVE_RADIUS)) # A new random country road: the agent can't learn one road by heart
 
-        self.car.left = CAR_START_X
-        self.car.top = CAR_START_Y
-        self.car_x = CAR_START_X
-        self.car_y = CAR_START_Y
-        self.car_angle = CAR_START_ANGLE
+        # The car starts at the beginning of the road, in the right lane, pointing along the road
+        start_angle = road_angle(self.road_points, 0)
+        forward, right = math.radians(start_angle), math.radians(start_angle - 90)
+        start_x, start_y = self.road_points[0]
+        center_x = start_x + CAR_START_AHEAD * math.cos(forward) + LANE_WIDTH / 2 * math.cos(right) # A bit after the start line...
+        center_y = start_y - CAR_START_AHEAD * math.sin(forward) - LANE_WIDTH / 2 * math.sin(right) # ...in the middle of the right lane
+        self.car_x = center_x - CAR_WIDTH / 2 # The true position is the top-left corner of the car's Rect
+        self.car_y = center_y - CAR_HEIGHT / 2
+        self.car.left = round(self.car_x)
+        self.car.top = round(self.car_y)
+        self.car_angle = start_angle
         self.car_speed = 0
         self.step_count = 0
         self.step_noprogress_count = 0

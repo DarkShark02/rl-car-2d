@@ -39,3 +39,23 @@ def test_routes_are_varied():
     rng = np.random.default_rng(0)
     routes = {tuple(find_route((0, 0), (3, 3), 5, 5, rng)) for _ in range(30)}
     assert len(routes) > 5 # Many different shortest routes between the same two corners
+
+
+def test_random_city_routes_are_drivable_roads():
+    from city import TURN_RADIUS, random_city_pieces
+    from car_env import MIN_CURVE_RADIUS, LANE_WIDTH
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        pieces = random_city_pieces(rng)
+        assert pieces[0][1] == 0 and pieces[-1][1] == 0 # Straight at the start and at the end
+        assert all(length >= 0 for length, _ in pieces)
+        assert all(degrees in (0, 90, -90) for _, degrees in pieces) # City: only straights and 90° turns
+    assert TURN_RADIUS - LANE_WIDTH / 2 >= MIN_CURVE_RADIUS # In the right lane, the car turns on a circle it can drive
+
+
+def test_random_city_routes_always_turn():
+    from city import random_city_pieces
+    rng = np.random.default_rng(1)
+    for _ in range(200):
+        pieces = random_city_pieces(rng)
+        assert any(degrees != 0 for _, degrees in pieces) # Never a straight route

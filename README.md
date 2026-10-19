@@ -134,6 +134,26 @@ _I'll update this section at every phase: problems I ran into, rewards that didn
 - **Doing nothing can be the best strategy.** On random roads, my first agent learned to... never move. Driving without knowing how to steer meant crashing at the first curve (−5), standing still meant 0. It got stuck in this local minimum for a million steps. Two fixes: standing still for 3 seconds now counts as a failure, and an entropy bonus keeps the agent trying new actions.
 - **Look at the failures, not only at the score.** The next agent finished only 19 roads out of 30. Watching the failed episodes showed the car stopped in the middle of the road with the throttle pressed: an old invisible wall from the straight road, which now cut every road going down. Without it, the same agent finished 30 out of 30.
 
+## How this project is built
+
+This is my project for learning reinforcement learning: I chose what to build,
+planned the phases, and made the design decisions along the way. Many of the
+key changes came from looking at the results and asking "why?": replacing the
+endless curves with a real city grid, finding routes with BFS, noticing that the
+agent was overfitting a single road, spotting routes and goals that didn't make sense.
+
+I wrote the core logic myself — the game loop, the car physics, the environment
+rules and rewards, the road and city route generators — step by step, with an
+AI assistant (Claude, by Anthropic) as a tutor: it explained the concepts, asked
+guiding questions, reviewed my code and pointed out bugs.
+
+To keep the focus on learning machine learning, I asked it to take care of the
+supporting parts: the tests, the training and video scripts, most of the drawing
+code, tuning values, and drafting this README. When I got stuck, it also fixed
+or completed parts of the logic, explaining each change.
+
+Every lesson in "What I learned" comes from problems I actually ran into.
+
 ## Credits
 
 - Car sprite: [Top Down Car Sprites](https://opengameart.org/node/33247) by Unlucky Studio (OpenGameArt), free for personal and commercial use.

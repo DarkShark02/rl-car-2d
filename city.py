@@ -3,6 +3,7 @@ from collections import deque
 
 from road import round_up_to_spacing
 
+DIRECTION_ANGLES = {(-1, 0): 90, (1, 0): 270, (0, 1): 0, (0, -1): 180} # (Δrow, Δcolumn) -> angle: up, down, right, left
 TURN_RADIUS = 200 # Radius of the center line in a 90° turn (the car, in the right lane, turns on 155 px: wider than MIN_CURVE_RADIUS)
 DIRECTION_ANGLES = {(-1, 0): 90, (1, 0): 270, (0, 1): 0, (0, -1): 180} # (Δrow, Δcolumn) -> angle: up, down, right, left
 
@@ -66,12 +67,43 @@ def route_to_pieces(route, xs, ys):
     straight = lengths[0] # The straight piece we are building
     for turn, next_length in zip(turns, lengths[1:]):
         if turn == 0:
-            straight += next_length 
+            straight += next_length
         else:
-            pieces.append((straight - TURN_RADIUS, 0)) 
-            pieces.append((arc_length, turn)) 
+            pieces.append((straight - TURN_RADIUS, 0))
+            pieces.append((arc_length, turn))
             straight = next_length - TURN_RADIUS
     pieces.append((straight, 0)) # The last straight piece
     return pieces
 
-        
+
+
+# A random city
+CITY_STREETS = 5 # Streets in each direction: 5 x 5 = 25 intersections
+CITY_MIN_GAP, CITY_MAX_GAP = 600, 1000 # Distance between two parallel streets: two turns of TURN_RADIUS take 400, the rest is a straight piece with its center line
+CITY_MIN_ROUTE_STEPS = 4 # Start and goal at least this many blocks apart, so every route has some turns
+
+
+def random_city(rng):
+    # A new random city and a route through it: street positions, the route, its road pieces and where it starts
+    xs = random_street_positions(rng, CITY_STREETS, CITY_MIN_GAP, CITY_MAX_GAP) # x of the vertical streets
+    ys = random_street_positions(rng, CITY_STREETS, CITY_MIN_GAP, CITY_MAX_GAP) # y of the horizontal streets
+    while True: # Pick start and goal far enough apart, and never on the same street (that would be a straight route)
+        start = (int(rng.integers(CITY_STREETS)), int(rng.integers(CITY_STREETS)))
+        goal = (int(rng.integers(CITY_STREETS)), int(rng.integers(CITY_STREETS)))
+        rows_apart, columns_apart = abs(start[0] - goal[0]), abs(start[1] - goal[1])
+        if rows_apart >= 1 and columns_apart >= 1 and rows_apart + columns_apart >= CITY_MIN_ROUTE_STEPS: # Different row AND column: at least one turn
+            break
+    route = find_route(start, goal, CITY_STREETS, CITY_STREETS, rng)
+    first_step = (route[1][0] - route[0][0], route[1][1] - route[0][1])
+    return {
+        "xs": xs,
+        "ys": ys,
+        "route": route,
+        "pieces": route_to_pieces(route, xs, ys),
+        "start": (xs[start[1]], ys[start[0]], DIRECTION_ANGLES[first_step]), # The route starts at the start intersection, heading to the next one
+    }
+
+
+def random_city_pieces(rng):
+    # Only the road pieces of a random city route
+    return random_city(rng)["pieces"]
