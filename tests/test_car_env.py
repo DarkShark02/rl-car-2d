@@ -7,11 +7,11 @@ from car_env import (
 )
 
 # Actions are [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
-THROTTLE = [1, 0]
-COAST = [1, 1]
-BRAKE = [1, 2]
+THROTTLE = [2, 0] # Steering index 2 = straight (STEER_LEVELS)
+COAST = [2, 1]
+BRAKE = [2, 2]
 LEFT_THROTTLE = [0, 0]
-RIGHT_THROTTLE = [2, 0]
+RIGHT_THROTTLE = [4, 0]
 LEFT_COAST = [0, 1]
 
 
@@ -23,7 +23,7 @@ STRAIGHT_ROAD = [(5000, 0)] # The rules are tested on a fixed straight road, wha
 @pytest.fixture
 def env():
     # A fresh environment on the straight road, already reset, for every test
-    env = CarEnv(road_pieces=STRAIGHT_ROAD)
+    env = CarEnv(road_pieces=STRAIGHT_ROAD, start_speed=0) # The rule tests start with the car still
     env.reset(seed=0)
     return env
 
@@ -145,7 +145,7 @@ def test_wheels_on_the_grass_cost_a_penalty_but_the_episode_goes_on(env):
 def test_off_road_ends_episode_with_penalty(env, action):
     obs, reward, terminated, truncated, steps = run_until_done(env, action)
     assert terminated and not truncated
-    assert reward == pytest.approx(-5, abs=0.1) # -5, plus a tiny progress and lane penalty
+    assert reward == pytest.approx(-5, abs=0.3) # -5, plus the lane, grass and wrong-way penalties of that last step
 
 
 def test_reaching_the_end_ends_episode_with_bonus(env):
@@ -184,11 +184,23 @@ def test_no_invisible_wall_on_roads_going_down():
     assert env.car_speed > 0 # Nothing stops the car: the old wall at y = HEIGHT is gone
 
 
-def test_time_limit_truncates_the_episode(env):
+def test_running_out_of_time_is_a_failure(env):
+    from car_env import TIME_OUT_PENALTY
     env.max_steps = 100 # A short time limit, reached while the car is still driving
     obs, reward, terminated, truncated, steps = run_until_done(env, THROTTLE)
-    assert truncated and not terminated # Out of time: not a success, not a failure
+    assert terminated # Out of time: too slow, a failure
     assert steps == env.max_steps
+    assert reward == pytest.approx(-TIME_OUT_PENALTY, abs=0.1)
+
+
+def test_every_end_has_a_reason(env):
+    obs, reward, terminated, truncated, info = env.step(THROTTLE)
+    assert info["reason"] is None # Still driving
+    while True:
+        obs, reward, terminated, truncated, info = env.step(LEFT_THROTTLE)
+        if terminated or truncated:
+            break
+    assert info["reason"].startswith("off the route") # Steering left until the grass
 
 
 def test_standing_still_for_too_long_is_a_failure(env):
@@ -256,3 +268,228 @@ def test_observations_stay_in_space_even_off_road(env, action):
         assert env.observation_space.contains(obs)
         if terminated or truncated:
             break
+
+
+# --- Traffic lights (city) ---
+
+def city_env_before_a_light(seed=101, color_timer=0, distance=60, speed=0):
+    # A city episode with the car in its lane, `distance` px before the first stop line, all lights at the same timer
+    from car_env import LANE_WIDTH
+    from road import road_angle
+    import math
+    env = CarEnv(start_speed=0) # The default world is the city
+    env.reset(seed=seed)
+    stop = env.stop_indices[0]
+    index = stop - distance // 5
+    x, y = env.road_points[index]
+    angle = road_angle(env.road_points, index)
+    right = math.radians(angle - 90)
+    env.car_x = x + LANE_WIDTH / 2 * math.cos(right) - CAR_WIDTH / 2
+    env.car_y = y - LANE_WIDTH / 2 * math.sin(right) - 25
+    env.car.left, env.car.top = round(env.car_x), round(env.car_y)
+    env.car_angle, env.car_speed, env.road_index = angle, speed, index
+    env.light_timers = [color_timer] * len(env.stop_indices)
+    return env
+
+
+def test_city_routes_have_traffic_lights():
+    env = CarEnv()
+    env.reset(seed=101)
+    assert len(env.stop_indices) >= 1
+    assert env.stop_indices == sorted(env.stop_indices) # In the order the car meets them
+
+
+def test_lights_cycle_green_yellow_red():
+    from car_env import GREEN_SECONDS, YELLOW_SECONDS, LIGHT_CYCLE_STEPS
+    env = CarEnv()
+    env.reset(seed=101)
+    def color_at(timer):
+        env.light_timers = [timer]
+        env.stop_indices = env.stop_indices[:1]
+        return env.light_colors()[0]
+    assert color_at(0) == "green"
+    assert color_at(int(GREEN_SECONDS * STEPS_PER_SECOND)) == "yellow"
+    assert color_at(int((GREEN_SECONDS + YELLOW_SECONDS) * STEPS_PER_SECOND)) == "red"
+    assert color_at(LIGHT_CYCLE_STEPS - 1) == "red"
+
+
+def test_crossing_on_red_ends_the_episode():
+    from car_env import RED_LIGHT_PENALTY, LIGHT_CYCLE_STEPS
+    env = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, speed=MAX_SPEED) # Red for a while
+    obs, reward, terminated, truncated, steps = run_until_done(env, THROTTLE)
+    assert terminated and steps < 20 # It crossed the stop line almost at once
+    assert reward == pytest.approx(-RED_LIGHT_PENALTY, abs=0.2)
+
+
+def test_crossing_on_green_is_fine():
+    env = city_env_before_a_light(color_timer=0, speed=MAX_SPEED) # Green for 4 seconds
+    for _ in range(20):
+        obs, reward, terminated, truncated, info = env.step(THROTTLE)
+        assert not terminated
+
+
+def test_waiting_at_a_red_light_is_not_a_stall():
+    from car_env import LIGHT_CYCLE_STEPS
+    env = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=40, speed=0) # Stopped before a red light
+    for _ in range(STALL_SECONDS * STEPS_PER_SECOND + 10): # Longer than the stall limit, but the light is still red
+        obs, reward, terminated, truncated, info = env.step(BRAKE)
+        if env.light_colors()[0] != "red":
+            break
+        assert not terminated
+
+
+def test_light_observation_is_one_hot():
+    from car_env import LIGHT_CYCLE_STEPS
+    env = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200) # Red
+    obs = env.get_obs()
+    assert obs.shape == (15,)
+    assert list(obs[11:14]) == [0, 0, 1] # green, yellow, red
+    assert 0 < obs[10] < 1 # The stop line is close, within the rays' reach
+
+
+def test_city_without_traffic_lights():
+    env = CarEnv(traffic_lights=False)
+    obs, info = env.reset(seed=101)
+    assert env.stop_indices == []
+    assert list(obs[10:15]) == [1, 1, 0, 0, 1] # No light ahead: far away, green, and no change coming
+
+
+def test_yellow_far_from_the_line_means_stop():
+    from car_env import GREEN_SECONDS, RED_LIGHT_PENALTY
+    turns_yellow = int(GREEN_SECONDS * STEPS_PER_SECOND)
+    slow_far = city_env_before_a_light(color_timer=turns_yellow - 1, distance=500, speed=2) # Slow and far when it turns yellow: room to brake
+    slow_far.step(COAST)
+    assert slow_far.must_stop_at_yellow[0] # It could stop, so it must
+
+    env = city_env_before_a_light(color_timer=turns_yellow + 10, distance=60, speed=MAX_SPEED) # Yellow (for 2 more seconds), right before the line
+    env.must_stop_at_yellow = [True] * len(env.stop_indices) # ...a yellow it could have stopped for
+    obs, reward, terminated, truncated, steps = run_until_done(env, THROTTLE)
+    assert terminated and steps < 20 # It crossed while the light was still yellow
+    assert reward == pytest.approx(-RED_LIGHT_PENALTY, abs=0.3)
+
+
+def test_yellow_too_close_to_stop_may_go_on():
+    from car_env import GREEN_SECONDS
+    turns_yellow = int(GREEN_SECONDS * STEPS_PER_SECOND)
+    env = city_env_before_a_light(color_timer=turns_yellow - 1, distance=80, speed=MAX_SPEED) # Fast and close: it can't stop in time
+    for _ in range(20):
+        obs, reward, terminated, truncated, info = env.step(THROTTLE)
+        assert not terminated # Crossing on that yellow is allowed
+    assert env.must_stop_at_yellow[0] is False
+
+
+def test_stopping_far_from_a_red_light_is_not_a_stall_but_costs():
+    from car_env import LIGHT_CYCLE_STEPS
+    env = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 230, distance=300, speed=0) # Red for almost 4 s, stopped 300 px away
+    total = 0
+    for _ in range(STALL_SECONDS * STEPS_PER_SECOND + 10): # Longer than the stall limit: no stall, it must not be forced to move on red
+        obs, reward, terminated, truncated, info = env.step(BRAKE)
+        total += reward
+        assert not terminated
+    assert total < -1 # But waiting that far away costs something
+
+
+def test_waiting_costs_more_with_the_nose_far_from_the_line():
+    from car_env import LIGHT_CYCLE_STEPS
+    near = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=150, speed=0) # Both outside the wait zone
+    far = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=300, speed=0)
+    near_reward = near.step(BRAKE)[1]
+    far_reward = far.step(BRAKE)[1]
+    assert far_reward < near_reward < 0
+
+
+def test_stopping_in_the_wait_zone_pays_once_per_light():
+    from car_env import LIGHT_CYCLE_STEPS, STOP_IN_ZONE_REWARD
+    env = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=40, speed=0) # Red, nose 15 px from the line
+    first = env.step(BRAKE)[1]
+    second = env.step(BRAKE)[1]
+    assert first == pytest.approx(STOP_IN_ZONE_REWARD, abs=0.1) # The reward, once...
+    assert abs(second) < 0.1 # ...and then nothing more for waiting there
+
+
+def test_driving_at_normal_speed_towards_a_red_light_costs_nothing_extra():
+    from car_env import LIGHT_CYCLE_STEPS
+    red = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=500, speed=5) # Far enough to brake, at a normal speed: braking early isn't needed
+    green = city_env_before_a_light(color_timer=0, distance=500, speed=5)
+    assert red.step(COAST)[1] == pytest.approx(green.step(COAST)[1])
+
+
+def test_lab_is_a_straight_road_with_traffic_lights():
+    from car_env import LAB_LENGTH, LAB_MIN_LIGHT_GAP, LAB_MAX_LIGHT_GAP
+    env = CarEnv(world="lab")
+    for seed in range(5):
+        env.reset(seed=seed)
+        assert env.road_length == LAB_LENGTH
+        gaps = [b - a for a, b in zip([0] + env.stop_indices, env.stop_indices)]
+        assert len(env.stop_indices) >= 3
+        assert all(LAB_MIN_LIGHT_GAP <= gap * 5 <= LAB_MAX_LIGHT_GAP for gap in gaps)
+
+
+def test_light_observation_is_the_gap_with_detail_near_the_line():
+    from car_env import LIGHT_CYCLE_STEPS
+    near = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=45, speed=0).get_obs()[10] # Nose 20 px from the line
+    far = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=300, speed=0).get_obs()[10]
+    assert 0.1 < near < far < 1 # Close to the line it is still clearly more than 0
+
+
+def test_countdown_is_hidden_on_red():
+    from car_env import LIGHT_CYCLE_STEPS
+    env = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 30) # Red, half a second left
+    assert env.get_obs()[14] == 1.0
+
+
+def test_episodes_start_with_the_car_already_moving():
+    from car_env import CAR_START_SPEED
+    env = CarEnv()
+    env.reset(seed=0)
+    assert env.car_speed == CAR_START_SPEED > 0
+
+
+def test_light_countdown_observation():
+    from car_env import GREEN_SECONDS
+    env = city_env_before_a_light(color_timer=0) # Green, just turned on
+    full = env.get_obs()[14]
+    env.light_timers = [int(GREEN_SECONDS * STEPS_PER_SECOND) - 30] * len(env.stop_indices) # Green, half a second left
+    almost = env.get_obs()[14]
+    assert 0 < almost < full <= 1 # The countdown goes down as the change gets closer
+
+
+def test_approaching_a_red_light_too_fast_costs_more_the_faster_it_goes(monkeypatch):
+    import car_env
+    from car_env import LIGHT_CYCLE_STEPS
+    monkeypatch.setattr(car_env, "UNDERSPEED_PENALTY", 0) # Only the too-fast side of the braking curve is measured here
+    def extra_cost(distance, speed): # What the red light costs, compared to the same step on green
+        red = city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=distance, speed=speed)
+        green = city_env_before_a_light(color_timer=0, distance=distance, speed=speed)
+        return green.step(COAST)[1] - red.step(COAST)[1]
+    assert extra_cost(400, 2) == pytest.approx(0) # Far and slow: below the braking curve, nothing to pay
+    assert 0 < extra_cost(150, 4) < extra_cost(150, MAX_SPEED) # Above the curve: the faster, the more it costs
+
+
+def test_stopping_short_of_the_wait_zone_costs_more_the_farther_it_is():
+    from car_env import LIGHT_CYCLE_STEPS
+    def cost(distance): # Stopped at a red light, `distance` px before the line
+        return -city_env_before_a_light(color_timer=LIGHT_CYCLE_STEPS - 200, distance=distance, speed=0).step(BRAKE)[1]
+    assert cost(300) > cost(110) > 0
+
+
+def test_weaving_costs_something(env):
+    straight = env.step(COAST)[1]
+    env.reset(seed=0)
+    env.car_angle += 20 # Same place, pointing 20° to the side
+    assert env.step(COAST)[1] < straight
+
+
+def test_crossing_on_red_is_worse_than_stalling():
+    from car_env import RED_LIGHT_PENALTY, STALL_PENALTY, OFF_ROAD_PENALTY
+    assert RED_LIGHT_PENALTY > max(STALL_PENALTY, OFF_ROAD_PENALTY) # Otherwise a car stopped far from the line may as well run the red
+
+
+def test_small_steering_turns_less_than_full_steering(env):
+    small, full = CarEnv(road_pieces=STRAIGHT_ROAD, start_speed=0), CarEnv(road_pieces=STRAIGHT_ROAD, start_speed=0)
+    small.reset(seed=0); full.reset(seed=0)
+    small.car_speed = full.car_speed = MAX_SPEED
+    start = small.car_angle
+    small.step([1, 1]) # A little left
+    full.step([0, 1]) # Full left
+    assert 0 < small.car_angle - start < full.car_angle - start # Left = the angle grows, less with a little steering

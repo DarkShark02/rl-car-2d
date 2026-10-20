@@ -28,11 +28,11 @@ while running: # Main game loop
         dy += 1
 
     # 2 update    
-    obs, reward, terminated, truncated, info = env.step([dx + 1, dy + 1]) # Update the environment based on the input actions (dx, dy) and get the new observation, reward, and termination status
+    obs, reward, terminated, truncated, info = env.step([2 * (dx + 1), dy + 1]) # Arrows steer fully: dx -1/0/+1 = steering index 0/2/4 (full left, straight, full right). Update the environment based on the input actions (dx, dy) and get the new observation, reward, and termination status
     total_reward += reward # Accumulate the total reward
 
     if terminated or truncated: # If the episode has ended
-        print(f"Episode finished after {env.step_count} steps, with reward: {total_reward:.2f}") # Print the number of steps taken and total reward for the episode
+        print(f"Episode finished after {env.step_count} steps, with reward: {total_reward:.2f}, because: {info['reason']}") # Steps, total reward and why it ended
         env.reset() # Reset the environment for a new episode
         total_reward = 0 # Reset the total reward for the new episode
 

@@ -28,13 +28,16 @@ RAY_SEARCH_WINDOW = 5 # A ray moves POINT_SPACING pixels per step: its nearest r
 # Car physics: every value is expressed in seconds, then converted to steps (the game runs at 60 steps per second)
 STEPS_PER_SECOND = 60 # Simulation steps in one second of game time
 MAX_SPEED = 8 # Top speed, in pixels per step
+CAR_START_SPEED = MAX_SPEED / 2 # The car starts already moving: with random actions (brake and friction stronger than the throttle) a car starting still never moves, and the agent never discovers that driving pays
 ACCELERATION = MAX_SPEED / (3 * STEPS_PER_SECOND) # Full throttle: from 0 to MAX_SPEED in 3 seconds
 BRAKE = MAX_SPEED / (2 * STEPS_PER_SECOND) # Full brake: from MAX_SPEED to 0 in 2 seconds
 FRICTION = MAX_SPEED / (6 * STEPS_PER_SECOND) # No pedals: from MAX_SPEED to 0 in 6 seconds
 CAR_TURN_RADIUS = 2 * CAR_HEIGHT # Tightest circle the car can drive, steering fully: about twice its length (pixels)
 STEER_RATE = math.degrees(1 / CAR_TURN_RADIUS) # Degrees turned per pixel traveled: the same circle at any speed
+STEER_LEVELS = [-1, -0.25, 0, 0.25, 1] # Steering actions: full left, a little left, straight, a little right, full right.
+# With only full left / straight / full right one step turned the car 4.6° at top speed: it could only zigzag to stay in the lane
 MIN_CURVE_RADIUS = 1.5 * CAR_TURN_RADIUS # Random curves are never tighter than this: the car can drive them with some margin
-TIME_LIMIT_FACTOR = 2 # Time limit of an episode: twice the steps needed to drive the whole road at top speed
+TIME_LIMIT_FACTOR = 4 # Time limit of an episode: 4 times the steps needed at top speed (plus the traffic lights). It's not a race: only a car that crawls along runs out of time
 BRAKING_DISTANCE = (MAX_SPEED / 2) * (MAX_SPEED / BRAKE) # Average speed while braking × steps needed to stop from top speed
 
 # Sensors: rays that measure how far the road goes around the car
@@ -52,6 +55,22 @@ WRONG_WAY_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step in the opposite lane c
 GRASS_PENALTY = 2 * MAX_PROGRESS_PER_STEP # Each step with wheels on the grass costs twice the best progress
 STALL_SECONDS = 3 # If the car is stuck for this many seconds, the episode ends
 STALL_PENALTY = OFF_ROAD_PENALTY # Being stuck counts as a failure, like going off the road
+TIME_OUT_PENALTY = OFF_ROAD_PENALTY # Running out of time (crawling) is a failure too: otherwise driving very slowly would be a free, risk-free strategy
+RED_LIGHT_PENALTY = 2 * OFF_ROAD_PENALTY # Crossing a stop line on red (or on a yellow it could stop for): the worst mistake. Worse than a stall, so gambling on the light never pays
+LIGHT_WAIT_GAP = CAR_HEIGHT # The wait zone: the car's nose between the stop line and this far from it (one car length)
+STOP_IN_ZONE_REWARD = 2 # Once per light: coming to a full stop inside the wait zone at a light it must stop for. ~1/10 of the finish: felt, but not worth hunting for
+COMFORT_BRAKE = 0.75 * BRAKE # Braking curve towards a light it must stop for: braking with 3/4 of the full brake, to keep some margin
+OVERSPEED_PENALTY = 0.08 # Per step, times (speed - curve speed) / MAX_SPEED: too fast to stop gently in the middle of the wait zone.
+# A signal at every step that says how to brake (2 px/step too fast ≈ 0.02, like a step of progress), instead of only the -10 at the line
+UNDERSPEED_PENALTY = 0.08 # Per step, before the wait zone, times (half the curve speed - speed) / MAX_SPEED: too slow, it stops short of the zone.
+# The other side of the curve: stopped 220 px away ≈ 0.022 per step, 80 px away ≈ 0.012 (ppo_car_v1_lab stopped at 55–110 px and never earned the zone reward)
+HEADING_PENALTY = 0.02 # Per step, times the angle between the car and the road / 45°: weaving means always pointing a bit sideways (ppo_car_v1_lab weaved up to 29° near the lights)
+LANE_PENALTY = 0.03 # Per step, with the car's center on the lane's edge (touching the grass, 30 px off: 0.02, a bit more than the 0.016 of progress at top speed: the edge never pays off). 0.01 and 0.02 were too weak: the car drifted 10 px right and cut the turns. At 0.05 (v10) driving off-center cost more than it earned and the agent learned to stall
+LAB_LENGTH = 3200 # The lab (world="lab"): a straight road with traffic lights, to study the light rules quickly
+LAB_MIN_LIGHT_GAP, LAB_MAX_LIGHT_GAP = 500, 900 # Distance between two lights in the lab: random in this range, ~4 lights per road
+LIGHT_COLOR_ORDER = ("green", "yellow", "red") # One-hot order of the light color in the observation
+GREEN_SECONDS, YELLOW_SECONDS, RED_SECONDS = 4, 2.5, 4 # Traffic light cycle (yellow: longer than the 2 s needed to brake from top speed)
+LIGHT_CYCLE_STEPS = int((GREEN_SECONDS + YELLOW_SECONDS + RED_SECONDS) * STEPS_PER_SECOND) # A whole cycle, in steps
 
 # Drawing constants: only needed to show the world on screen (render)
 GRASS_COLOR = (60, 140, 60) # Define the color for grass
@@ -73,6 +92,14 @@ STOP_LINE_WIDTH = 2 * LINE_WIDTH # Stop lines at the intersections: thicker than
 STOP_LINE_DISTANCE = TURN_RADIUS # From the center of an intersection to its stop lines: where the rounded corners begin
 GOAL_COLOR = (240, 200, 40) # The goal of a city route: a yellow circle at the end of the route, in the right lane
 GOAL_RADIUS = LANE_WIDTH // 2 - LINE_OFFSET - LINE_WIDTH - 2 # Fits inside the lane, without covering the white edge line
+LIGHT_BOX_COLOR = (25, 25, 25) # Traffic lights: a black box with three lamps, only the active one lit
+LIGHT_LAMP_COLORS = {"green": (60, 220, 90), "yellow": (250, 200, 40), "red": (235, 50, 45)}
+LIGHT_LAMP_OFF = (70, 70, 70)
+LIGHT_LAMP_RADIUS = 5
+LIGHT_POLE_COLOR = (90, 90, 95) # The pole
+LIGHT_POLE_RADIUS = 6
+LIGHT_POLE_SIDE = ROAD_WIDTH // 2 + 12 # The light stands on the sidewalk, on the right of the road...
+LIGHT_BACK = 12 # ...a little before the stop line
 START_LINE_WIDTH = LINE_WIDTH # The start line is as thick as the edge lines
 CHECKER_SIZE = 10 # Side of one square of the checkered finish line, in pixels
 CHECKER_ROWS = 2 # How many rows of squares the finish line has
@@ -99,18 +126,20 @@ class CarEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60} # Gymnasium: supported render modes and speed
     #metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 240} # Gymnasium: supported render modes and speed, increased to 240 for faster training
 
-    def __init__(self, render_mode=None, road_pieces=None, world="city"):
+    def __init__(self, render_mode=None, road_pieces=None, world="city", traffic_lights=True, start_speed=CAR_START_SPEED):
         # what the agent can do and what it sees (action_space, observation_space); the road itself is built at every reset
         self.render_mode = render_mode # None = no drawing (training), "human" = window, "rgb_array" = image for videos
         self.screen = None # Created only the first time render() is called
         self.clock = None
         self.fixed_road_pieces = road_pieces # None = a new random road at every reset; a list of pieces = always that road
-        self.world = world # Random roads: "city" (streets and 90° turns) or "country" (long curves)
+        self.world = world # Random roads: "city" (streets and 90° turns), "country" (long curves) or "lab" (straight, with traffic lights)
+        self.traffic_lights = traffic_lights # False = a city without traffic lights (curriculum: first learn to drive, then the lights)
+        self.start_speed = start_speed # Speed at the start of every episode (the tests use 0)
 
         self.car = pygame.Rect(CAR_START_X, CAR_START_Y, CAR_WIDTH, CAR_HEIGHT) # Create a rectangle for the car
 
-        self.action_space = gym.spaces.MultiDiscrete([3, 3])         # Actions: [steering, pedals]. Steering: 0 = left, 1 = straight, 2 = right. Pedals: 0 = throttle, 1 = none, 2 = brake
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)  # Observations: [angle distance in 7 rays, distance to center of right lane, speed, direction], all normalized between -1 and 1
+        self.action_space = gym.spaces.MultiDiscrete([len(STEER_LEVELS), 3]) # Actions: [steering, pedals]. Steering: an index of STEER_LEVELS (2 = straight). Pedals: 0 = throttle, 1 = none, 2 = brake
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(15,), dtype=np.float32)  # Observations: [7 rays, lane offset, speed, direction, distance to the next stop line, next light green/yellow/red, time until it changes], all within -1..1
         self.step_count = 0 # Initialize the step counter
         self.road_index = 0 # Index of the nearest point on the road to the car's center
         self.step_noprogress_count = 0 # Count of consecutive steps with no progress (for stalling detection)
@@ -186,6 +215,94 @@ class CarEnv(gym.Env):
             dash = [point_to_screen(point, camera_x, camera_y) for point in self.road_points[start:min(start + dash_points, last_dash) + 1]] # The points of this dash
             if len(dash) > 1: # A line needs at least two points
                 pygame.draw.lines(self.screen, LINE_COLOR, False, dash, DASH_LINE_WIDTH) # Draw one dash, following the curve
+
+    def light_colors(self):
+        # The color of every traffic light right now, in route order: "green", "yellow" or "red"
+        green_end = GREEN_SECONDS * STEPS_PER_SECOND # The cycle: green from 0 to here...
+        yellow_end = (GREEN_SECONDS + YELLOW_SECONDS) * STEPS_PER_SECOND # ...then yellow until here, then red until the end
+        colors = []
+        for timer in self.light_timers:
+            if timer < green_end:
+                colors.append("green")
+            elif timer < yellow_end:
+                colors.append("yellow")
+            else:
+                colors.append("red")
+        return colors
+
+    def light_time_left(self, light):
+        # Steps until traffic light number `light` changes color (like the countdown some real lights have).
+        # In the observations: it solves the yellow dilemma (the v11 test failed only because the car started still and never explored)
+        timer = self.light_timers[light]
+        green_end = GREEN_SECONDS * STEPS_PER_SECOND
+        yellow_end = (GREEN_SECONDS + YELLOW_SECONDS) * STEPS_PER_SECOND
+        if timer < green_end:
+            return green_end - timer
+        if timer < yellow_end:
+            return yellow_end - timer
+        return LIGHT_CYCLE_STEPS - timer
+
+    def light_gap(self, stop_index):
+        # Free space between the car's nose and a stop line, in pixels (negative: the nose is already past it)
+        return (stop_index - self.road_index) * POINT_SPACING - CAR_HEIGHT / 2
+
+    def next_light(self):
+        # The next traffic light ahead of the car: (its stop line index, its color), or None if there is none left
+        for stop_index, color in zip(self.stop_indices, self.light_colors()):
+            if stop_index > self.road_index: # Its stop line is still ahead of the car's center
+                return stop_index, color
+        return None
+
+    def find_stop_indices(self):
+        # For every intersection in the middle of the route: the point of the route where the car meets its stop line.
+        # The stop line is STOP_LINE_DISTANCE before the center of the intersection, on the street the car arrives from:
+        # exactly where a turn begins, so it is always a point of the route.
+        xs, ys, route = self.city["xs"], self.city["ys"], self.city["route"]
+        indices = []
+        for (row_a, col_a), (row_b, col_b) in zip(route[:-2], route[1:-1]): # Every step that arrives at a middle intersection
+            center_x, center_y = xs[col_b], ys[row_b]
+            back_x, back_y = xs[col_a] - center_x, ys[row_a] - center_y # Pointing back along the street we arrive from
+            length = math.hypot(back_x, back_y)
+            stop_x = center_x + back_x / length * STOP_LINE_DISTANCE
+            stop_y = center_y + back_y / length * STOP_LINE_DISTANCE
+            indices.append(nearest_point_index(self.road_points, stop_x, stop_y))
+        return indices
+
+    def lab_stop_indices(self):
+        # The lab's stop lines: random distances apart (so the agent can't learn their places by heart), in multiples of POINT_SPACING
+        indices, distance = [], 0
+        while True:
+            distance += int(self.np_random.integers(LAB_MIN_LIGHT_GAP, LAB_MAX_LIGHT_GAP + 1)) // POINT_SPACING * POINT_SPACING
+            if distance > LAB_LENGTH - LAB_MIN_LIGHT_GAP / 2: # Leave some road after the last light
+                return indices
+            indices.append(distance // POINT_SPACING)
+
+    def draw_stop_line(self, stop_index, camera_x, camera_y):
+        # A thick white line across the right lane, ending at the stop point (the city draws its own with the streets)
+        forward = math.radians(road_angle(self.road_points, stop_index))
+        right = forward - math.pi / 2
+        point = self.road_points[stop_index]
+        outer = ROAD_WIDTH / 2 - LINE_OFFSET
+        corners = [move(point, right, 0), move(point, right, outer), move(move(point, right, outer), forward, -STOP_LINE_WIDTH), move(point, forward, -STOP_LINE_WIDTH)]
+        pygame.draw.polygon(self.screen, LINE_COLOR, [point_to_screen(corner, camera_x, camera_y) for corner in corners])
+
+    def draw_traffic_light(self, stop_index, color, camera_x, camera_y):
+        # On the right sidewalk, just before the stop line: a pole and a box with the three lamps in a column,
+        # like a traffic light seen from the front: red farthest ahead, then yellow, then green closest to the car
+        forward = math.radians(road_angle(self.road_points, stop_index)) # Direction of the cars arriving at this light
+        right = forward - math.pi / 2
+        box_center = move(move(self.road_points[stop_index], right, LIGHT_POLE_SIDE), forward, -LIGHT_BACK - LIGHT_LAMP_RADIUS * 4)
+        to_screen = lambda point: point_to_screen(point, camera_x, camera_y)
+
+        pygame.draw.circle(self.screen, LIGHT_POLE_COLOR, to_screen(move(box_center, right, LIGHT_LAMP_RADIUS + 5)), LIGHT_POLE_RADIUS) # The pole, behind the box
+
+        spacing = 2 * LIGHT_LAMP_RADIUS + 3
+        half_along, half_across = 1.5 * spacing + 2, LIGHT_LAMP_RADIUS + 3 # The box is long along the road: the lamps are in a column
+        corners = [move(move(box_center, forward, f * half_along), right, r * half_across) for f, r in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        pygame.draw.polygon(self.screen, LIGHT_BOX_COLOR, [to_screen(point) for point in corners])
+        for lamp_color, ahead in (("red", spacing), ("yellow", 0), ("green", -spacing)): # Red on top (farthest ahead), green at the bottom
+            lit = LIGHT_LAMP_COLORS[lamp_color] if lamp_color == color else LIGHT_LAMP_OFF
+            pygame.draw.circle(self.screen, lit, to_screen(move(box_center, forward, ahead)), LIGHT_LAMP_RADIUS)
 
     def draw_city(self, camera_x, camera_y):
         # The whole city around the route: asphalt everywhere, blocks with rounded corners, white edge lines and dashed center lines
@@ -271,9 +388,15 @@ class CarEnv(gym.Env):
             for corners, color in self.finish_squares: # Checkered finish line
                 pygame.draw.polygon(self.screen, color, [point_to_screen(point, camera_x, camera_y) for point in corners])
 
+        if self.city is None: # The city draws its stop lines with the streets
+            for stop_index in self.stop_indices:
+                self.draw_stop_line(stop_index, camera_x, camera_y)
+
         rotated = pygame.transform.rotozoom(self.car_sprite, self.car_angle - CAR_SPRITE_ANGLE, 1 / CAR_SPRITE_QUALITY) # 1. Rotate the image like the car (smooth edges) and shrink it to the car size
         car_center = world_to_screen(self.car, camera_x,camera_y).center # 2. Where the car's center is on screen
         self.screen.blit(rotated, rotated.get_rect(center=car_center)) # 3. Paste it with its center on the car's center
+        for stop_index, color in zip(self.stop_indices, self.light_colors()): # The traffic lights hang over the road: drawn above the car
+            self.draw_traffic_light(stop_index, color, camera_x, camera_y)
 
         if self.render_mode == "human":
             pygame.event.pump() # Keep the window responsive
@@ -297,7 +420,7 @@ class CarEnv(gym.Env):
         offset = self.center_offset() # Calculate the offset of the car from the center line of the road at the nearest point
         #normalized_dist_left = (ROAD_WIDTH / 2 + offset - CAR_WIDTH / 2) / ROAD_WIDTH # Distance from the car's left side to the left edge of the road
         #normalized_dist_right = (ROAD_WIDTH / 2 - offset - CAR_WIDTH / 2) / ROAD_WIDTH # Distance from the car's right side to the right edge of the road
-        normalized_dist_center_right_lane = (offset - LANE_WIDTH / 2) / ROAD_WIDTH # Distance from the car's center to the center of the right lane
+        normalized_dist_center_right_lane = max(-1.0, min(1.0, (offset - LANE_WIDTH / 2) / (LANE_WIDTH / 2))) # Distance from the center of the right lane, in half lanes: 10 px = 0.22, clearly visible (it was / ROAD_WIDTH: 10 px = 0.055, almost invisible)
         normalized_speed = self.car_speed / MAX_SPEED # Normalize the speed
         current_road_angle = road_angle(self.road_points, self.road_index) # Direction of the road where the car is
         normalized_direction = ((self.car_angle - current_road_angle + 180) % 360 - 180) / 180 # Difference from the road direction, always between -1 and +1
@@ -307,22 +430,46 @@ class CarEnv(gym.Env):
             length = ray_length(self.road_points, self.car.centerx, self.car.centery, self.car_angle + angle, RAY_LENGTH, RAY_STEP, ROAD_WIDTH / 2, self.road_index) # Calculate the length of the ray in the given direction, considering the road boundaries and the car's position
             normalized_ray_length.append(length / RAY_LENGTH) # Normalize the ray length to be between 0 and 1
 
-        normalized_values = np.array(normalized_ray_length + [normalized_dist_center_right_lane, normalized_speed, normalized_direction], dtype=np.float32)
+        light = self.next_light()
+        if light is None: # No traffic light ahead: as if it were far away and green
+            normalized_light_distance, light_one_hot, normalized_time_left = 1.0, [1.0, 0.0, 0.0], 1.0
+        else:
+            stop_index, color = light
+            gap = max(0.0, min(self.light_gap(stop_index), RAY_LENGTH)) # Free space in front of the nose, the same measure the rules use
+            normalized_light_distance = math.sqrt(gap / RAY_LENGTH) # Square root: more detail close to the line (20 px = 0.18 instead of 0.03), where stopping right matters
+            light_one_hot = [1.0 if color == name else 0.0 for name in LIGHT_COLOR_ORDER] # Exactly one 1: the color that is on
+            normalized_time_left = self.light_time_left(self.stop_indices.index(stop_index)) / (max(GREEN_SECONDS, RED_SECONDS) * STEPS_PER_SECOND) # Countdown: how soon the color changes (0..1)
+            if color == "red":
+                normalized_time_left = 1.0 # Hidden on red: useful to decide on green and yellow, but on red it only helps to time the green and run the light
 
-        return normalized_values # [7 rays (in the order of RAY_ANGLES), lane offset, speed, direction]
+        normalized_values = np.array(normalized_ray_length + [normalized_dist_center_right_lane, normalized_speed, normalized_direction, normalized_light_distance] + light_one_hot + [normalized_time_left], dtype=np.float32)
+
+        return normalized_values # [7 rays (in the order of RAY_ANGLES), lane offset, speed, direction, stop line distance, green, yellow, red, time until the light changes]
 
     def reset(self, seed=None, options=None):
         # build the road (random or fixed), put the car back at the start (position, angle, speed), reset the step counter
         # return first observation, info
         super().reset(seed=seed)
         self.city = None # Only set in the city world: the streets to draw around the route
+        self.stop_indices = [] # Points of the route where there is a stop line with a traffic light (none outside the city)
         if self.fixed_road_pieces is not None:
             self.build_road(self.fixed_road_pieces) # Always the same road (tests, or a road chosen on purpose)
         elif self.world == "city":
             self.city = random_city(self.np_random) # A new random city, and a route through it
             self.build_road(self.city["pieces"], self.city["start"])
+            if self.traffic_lights:
+                self.stop_indices = self.find_stop_indices() # Where the route crosses a stop line: one traffic light each
+            self.max_steps += len(self.stop_indices) * LIGHT_CYCLE_STEPS # Extra time to wait at every traffic light (a whole cycle each)
+        elif self.world == "lab":
+            self.build_road([(LAB_LENGTH, 0)]) # The lab: one straight road, only the traffic lights to learn
+            self.stop_indices = self.lab_stop_indices()
+            self.max_steps += len(self.stop_indices) * LIGHT_CYCLE_STEPS
         else:
             self.build_road(random_road_pieces(self.np_random, ROAD_PIECES_COUNT, MIN_CURVE_RADIUS)) # A new random country road: the agent can't learn one road by heart
+
+        self.light_timers = [int(self.np_random.integers(0, LIGHT_CYCLE_STEPS)) for _ in self.stop_indices] # One timer per light, each starting at a random point of its cycle (not synchronized)
+        self.must_stop_at_yellow = [True] * len(self.stop_indices) # Decided when each light turns yellow (a light that starts already yellow: the car is far, it must stop)
+        self.stopped_in_zone = [False] * len(self.stop_indices) # STOP_IN_ZONE_REWARD is paid once per light
 
         # The car starts at the beginning of the road, in the right lane, pointing along the road
         start_angle = road_angle(self.road_points, 0)
@@ -335,7 +482,7 @@ class CarEnv(gym.Env):
         self.car.left = round(self.car_x)
         self.car.top = round(self.car_y)
         self.car_angle = start_angle
-        self.car_speed = 0
+        self.car_speed = self.start_speed
         self.step_count = 0
         self.step_noprogress_count = 0
         self.road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery) # Full search: a new episode, there is no previous index
@@ -346,7 +493,7 @@ class CarEnv(gym.Env):
 
     def step(self, action):
         # action is a pair of values: [steering, pedals]
-        steer = action[0] - 1 # Steering: -1 = left, 0 = straight, +1 = right
+        steer = STEER_LEVELS[action[0]] # Steering: -1 = full left ... 0 = straight ... +1 = full right
         pedal = action[1] - 1 # Pedals: -1 = throttle, 0 = none, +1 = brake
         
         if pedal == -1: # Throttle
@@ -361,10 +508,10 @@ class CarEnv(gym.Env):
         self.car_x += self.car_speed * math.cos(math.radians(self.car_angle)) # Update the car's x position based on its angle and speed
         self.car_y -= self.car_speed * math.sin(math.radians(self.car_angle)) # Update the car's y position based on its angle and speed
 
-            
         self.car.left = round(self.car_x) # The Rect (whole pixels) follows the true position (decimals): used for drawing and edge checks
         self.car.top = round(self.car_y)
 
+        previous_road_index = self.road_index # To know which stop lines the car crosses in this step
         new_road_index = nearest_point_index(self.road_points, self.car.centerx, self.car.centery, around=self.road_index, window=CAR_SEARCH_WINDOW) # Update the index of the nearest point on the road to the car's center
         progress = (new_road_index - self.road_index) * POINT_SPACING # Calculate the progress made along the road based on the change in road index
         self.road_index = new_road_index # Update the road index for the next step
@@ -372,7 +519,9 @@ class CarEnv(gym.Env):
         offset = self.center_offset() # Calculate the offset of the car from the center line of the road at the nearest point
 
         reward = progress * PROGRESS_REWARD_PER_PIXEL # Reward for moving forward along the road
-        reward -= 0.01 * abs(offset - LANE_WIDTH / 2) / (LANE_WIDTH // 2) # Small penalty for being away from the center of the right lane, scaled by half the lane width
+        reward -= LANE_PENALTY * abs(offset - LANE_WIDTH / 2) / (LANE_WIDTH // 2) # Penalty for being away from the center of the right lane, scaled by half the lane width
+        heading_error = (self.car_angle - road_angle(self.road_points, self.road_index) + 180) % 360 - 180 # Degrees between the car and the road
+        reward -= HEADING_PENALTY * abs(heading_error) / 45 # Pointing sideways: weaving costs at every step, not only once far from the lane center
         
         if abs(offset) > ROAD_WIDTH / 2 - CAR_WIDTH / 2: # Off road: part of the car is outside the road boundaries
             reward -= GRASS_PENALTY # Add a penalty for going off the road
@@ -382,31 +531,66 @@ class CarEnv(gym.Env):
 
         terminated = False # Initialize the terminated flag to False
         truncated = False # Initialize the truncated flag to False
+        reason = None # Why the episode ended (returned in info, printed by main.py)
 
         behind_start = self.road_index == 0 and along_offset(self.road_points, 0, self.car.centerx, self.car.centery) < 0 # Turned around and drove back past the start line
 
         if abs(offset) > ROAD_WIDTH / 2 or behind_start: # Off road (or behind the start, where there is no road): episode fails
             terminated = True # Set the terminated flag to True
             reward -= OFF_ROAD_PENALTY # Add a penalty for going off the road
+            reason = "behind the start line" if behind_start else "off the route (in the city: also a street that is not the route)"
 
         if self.road_index == len(self.road_points) - 1: # Reached the end of the road: episode succeeds
             terminated = True # Set the terminated flag to True
             reward += FINISH_REWARD # Add a reward for successfully reaching the end of the road
+            reason = "finish"
 
-        if progress <= 0: # No progress made in this step
+        nose = CAR_HEIGHT // 2 // POINT_SPACING # How many road points the car's nose is ahead of its center
+        for k, (stop_index, color) in enumerate(zip(self.stop_indices, self.light_colors())): # Crossing a stop line with the nose on red (or on a yellow the car could stop for) ends the episode
+            crossed = previous_road_index + nose < stop_index <= self.road_index + nose
+            if crossed and (color == "red" or (color == "yellow" and self.must_stop_at_yellow[k])):
+                terminated = True
+                reward -= RED_LIGHT_PENALTY
+                reason = "crossed on red" if color == "red" else "crossed on a yellow it could stop for"
+
+        light = self.next_light()
+        stopping_light = light is not None and light[1] != "green" # A yellow or red light ahead
+        if stopping_light:
+            gap = self.light_gap(light[0]) # Free space between the car's nose and the stop line
+            k = self.stop_indices.index(light[0])
+            must_stop = light[1] == "red" or self.must_stop_at_yellow[k]
+            if must_stop: # The braking curve: the fastest speed that still stops gently in the middle of the wait zone (v² = 2·a·distance)
+                curve_speed = math.sqrt(2 * COMFORT_BRAKE * max(gap - LIGHT_WAIT_GAP / 2, 0))
+                reward -= OVERSPEED_PENALTY * max(self.car_speed - curve_speed, 0) / MAX_SPEED
+                if gap > LIGHT_WAIT_GAP: # Before the wait zone: much slower than the curve means it will stop too early
+                    reward -= UNDERSPEED_PENALTY * max(curve_speed / 2 - self.car_speed, 0) / MAX_SPEED
+            if must_stop and self.car_speed == 0 and gap <= LIGHT_WAIT_GAP and not self.stopped_in_zone[k]: # Stopped in the wait zone: well done, once per light
+                self.stopped_in_zone[k] = True
+                reward += STOP_IN_ZONE_REWARD
+        waiting_at_light = stopping_light # Stopped at a yellow or red light: never a stall (being far from the line already costs UNDERSPEED_PENALTY)
+        if progress <= 0 and not waiting_at_light: # No progress made in this step (and no good reason for it)
             self.step_noprogress_count += 1 # Increment the count of consecutive steps with no progress
             if self.step_noprogress_count >= STALL_SECONDS * STEPS_PER_SECOND: # If the car has been stuck for too long
                 terminated = True # Set the terminated flag to True, ending the episode due to stalling        
                 reward -= STALL_PENALTY # Add a penalty for stalling
-        else:
+                reason = "stalled (stopped too long, or too far from the stop line)"
+        elif progress > 0:
             self.step_noprogress_count = 0 # Reset the count if progress is made
         
+        self.light_timers = [(timer + 1) % LIGHT_CYCLE_STEPS for timer in self.light_timers] # Every light moves one step on in its cycle, then starts again
+        for k, timer in enumerate(self.light_timers): # A light just turned yellow: could the car still stop before its line?
+            if timer == int(GREEN_SECONDS * STEPS_PER_SECOND):
+                gap_now = self.light_gap(self.stop_indices[k])
+                braking_distance = self.car_speed ** 2 / (2 * BRAKE)
+                self.must_stop_at_yellow[k] = gap_now > braking_distance # Far enough to brake: it must stop (Italian Highway Code, art. 41). Too close: it may go on
         self.step_count += 1 # Increment the step counter
 
-        if self.step_count >= self.max_steps: # Check if the maximum number of steps has been reached
-            truncated = True
+        if self.step_count >= self.max_steps and not terminated: # Out of time: with a generous limit, only a car that crawls gets here. It counts as a failure
+            terminated = True
+            reward -= TIME_OUT_PENALTY
+            reason = "time out (too slow)"
 
         if self.render_mode == "human": # Gymnasium convention: in human mode the window updates by itself
             self.render()
 
-        return self.get_obs(), reward, terminated, truncated, {} # Return the observation, reward, terminated flag, truncated flag, and an empty info dictionary
+        return self.get_obs(), reward, terminated, truncated, {"reason": reason} # Observation, reward, terminated, truncated, and why the episode ended (None while it goes on)

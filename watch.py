@@ -13,10 +13,13 @@ def latest_model():
     return max(glob.glob("models/*.zip"), key=os.path.getmtime)
 
 
-MODEL_PATH = sys.argv[1] if len(sys.argv) > 1 else latest_model() # Model to watch: python watch.py [models/<name>.zip], default = latest
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+MODEL_PATH = args[0] if args else latest_model() # Model to watch: python watch.py [models/<name>.zip] [--no-lights] [--lab], default = latest
+TRAFFIC_LIGHTS = "--no-lights" not in sys.argv # --no-lights: a city without traffic lights (like stage A of the training)
+LAB = "--lab" in sys.argv # --lab: the straight road with traffic lights
 EPISODES = 3 # How many episodes to show
 
-env = CarEnv(render_mode="human") # Same world as training, but drawn in a window
+env = CarEnv(render_mode="human", world="lab" if LAB else "city", traffic_lights=TRAFFIC_LIGHTS) # Same world as training, but drawn in a window
 model = PPO.load(MODEL_PATH) # Load the trained agent
 if model.observation_space.shape != env.observation_space.shape: # Old models were trained on a different world (e.g. 3 observations instead of 5)
     sys.exit(f"{MODEL_PATH} was trained on an older version of the environment "
@@ -35,6 +38,6 @@ for episode in range(EPISODES):
         obs, reward, terminated, truncated, info = env.step(action) # The world moves one step (and redraws itself)
         total_reward += reward
         done = terminated or truncated
-    print(f"Episode {episode + 1}: reward {total_reward:.2f}, steps {env.step_count}")
+    print(f"Episode {episode + 1}: reward {total_reward:.2f}, steps {env.step_count}, because: {info['reason']}")
 
 env.close()
