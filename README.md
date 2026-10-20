@@ -11,7 +11,9 @@ The end goal: stay on the road, stop at red lights, obey traffic signs, and avoi
 ### Phase 6 — a city with traffic lights, learned in three stages
 The same agent, trained in three stages one after the other: first it learns to drive in a city without traffic lights, then it learns the traffic lights on a straight road (the "lab"), and finally it puts everything together in the city (3x speed). The final agent finishes 20 out of 20 cities it has never seen, stopping at red lights with its nose within about one car length of the stop line.
 
-<!-- Drag videos/ppo_car_v1_stages.mp4 here in the GitHub editor -->
+
+https://github.com/user-attachments/assets/394d7130-0ae4-448b-84ff-ee53e0d8763f
+
 
 ### Phase 5 — curves and random roads
 A new random road every episode, seen through 7 ray sensors. The agent learns to brake before curves and to keep its lane on roads it has never seen (3x speed).
